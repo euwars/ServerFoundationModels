@@ -1,6 +1,6 @@
-// Smoke test: LinuxFoundation inside a Hummingbird request handler.
+// Smoke test: ServerFoundationModels inside a Hummingbird request handler.
 import Hummingbird
-import LinuxFoundation
+import ServerFoundationModels
 import Foundation
 
 func smokeModel() -> ChatCompletionsLanguageModel {

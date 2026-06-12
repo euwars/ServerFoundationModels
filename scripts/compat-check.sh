@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reproducible third-party compatibility proof: clones real packages written
-# against Apple's FoundationModels, swaps the import to LinuxFoundation, and
+# against Apple's FoundationModels, swaps the import to ServerFoundationModels, and
 # runs their complete test suites.
 #
 # Usage: scripts/compat-check.sh [cache-dir]
@@ -14,14 +14,14 @@ swap_imports() {
   local dir="$1"
   grep -rl 'import FoundationModels' "$dir"/Sources "$dir"/Tests "$dir"/Examples 2>/dev/null \
     | xargs sed -i '' \
-      's/public import FoundationModels/public import LinuxFoundation/g; s/import FoundationModels/import LinuxFoundation/g' || true
+      's/public import FoundationModels/public import ServerFoundationModels/g; s/import FoundationModels/import ServerFoundationModels/g' || true
   grep -rl 'FoundationModels::' "$dir"/Sources "$dir"/Tests 2>/dev/null \
-    | xargs sed -i '' 's/FoundationModels::/LinuxFoundation::/g' || true
+    | xargs sed -i '' 's/FoundationModels::/ServerFoundationModels::/g' || true
   grep -rl 'FoundationModels\.' "$dir"/Sources "$dir"/Tests 2>/dev/null \
-    | xargs sed -i '' 's/FoundationModels\./LinuxFoundation./g' || true
+    | xargs sed -i '' 's/FoundationModels\./ServerFoundationModels./g' || true
   # repair over-matched module names
-  grep -rl 'LinuxFoundationUtilities' "$dir" 2>/dev/null \
-    | xargs sed -i '' 's/LinuxFoundationUtilities/FoundationModelsUtilities/g' || true
+  grep -rl 'ServerFoundationModelsUtilities' "$dir" 2>/dev/null \
+    | xargs sed -i '' 's/ServerFoundationModelsUtilities/FoundationModelsUtilities/g' || true
 }
 
 add_dependency() {
@@ -34,10 +34,10 @@ if lf not in s:
     s = re.sub(r"(\n  targets: \[)", f'\n  dependencies: [\n    .package(path: "{lf}")\n  ],\\1', s, count=1)
     s = re.sub(
         rf'(name: "{target}",\n)(      dependencies: \[)([^\]]*)\]',
-        rf'\1\2\3, .product(name: "LinuxFoundation", package: "LinuxFoundation")]',
+        rf'\1\2\3, .product(name: "ServerFoundationModels", package: "ServerFoundationModels")]',
         s, count=1) if f'name: "{target}",\n      dependencies: [' in s else re.sub(
         rf'(\.target\(\n      name: "{target}")',
-        rf'\1,\n      dependencies: [.product(name: "LinuxFoundation", package: "LinuxFoundation")]',
+        rf'\1,\n      dependencies: [.product(name: "ServerFoundationModels", package: "ServerFoundationModels")]',
         s, count=1)
 open(path, 'w').write(s)
 PYEOF
@@ -51,7 +51,7 @@ run() {
   rm -rf "$dir/.git"
   swap_imports "$dir"
   add_dependency "$dir" "$target"
-  echo "=== $name: building + testing against LinuxFoundation"
+  echo "=== $name: building + testing against ServerFoundationModels"
   (cd "$dir" && swift test --build-system native ${filter:+--filter "$filter"} 2>&1 | tail -1)
 }
 

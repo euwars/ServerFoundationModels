@@ -1,14 +1,14 @@
 # apple/foundation-models-utilities compatibility
 
-Proof run, 2026-06-12: the upstream package builds against LinuxFoundation
-with `import FoundationModels` → `import LinuxFoundation` (plus the new
+Proof run, 2026-06-12: the upstream package builds against ServerFoundationModels
+with `import FoundationModels` → `import ServerFoundationModels` (plus the new
 `FoundationModels::` module-selector spellings), and its complete test
 suite — Skills, history modifiers (rolling window, summarize, drop completed
 tool calls), chat-completions request/SSE/error/usage handling — passes:
 **92/92**.
 
 Live integration: its `ChatCompletionsLanguageModel`, driven by
-LinuxFoundation's `LanguageModelSession`, against vLLM (`qwen3-moe`,
+ServerFoundationModels's `LanguageModelSession`, against vLLM (`qwen3-moe`,
 Qwen3-30B-A3B) at `http://10.0.0.200:8000/v1` — the package's own Live test
 passes:
 
@@ -17,7 +17,7 @@ FMU_TEST_ENDPOINT=http://10.0.0.200:8000/v1 FMU_TEST_MODEL=qwen3-moe \
   swift test --filter ChatCompletionsTests.Live
 ```
 
-The LinuxFoundation parity suite also runs against that endpoint
+The ServerFoundationModels parity suite also runs against that endpoint
 (`PARITY_BACKEND=chat-completions PARITY_BASE_URL=http://10.0.0.200:8000
 PARITY_MODEL=qwen3-moe`): **41/41** after enabling the server's tool parser
 (vllm 0.22.1, restarted with `--enable-auto-tool-choice --tool-call-parser
@@ -26,7 +26,7 @@ behavior scenario — tool loop, structured output, recursive schemas, typed
 streaming, session properties, dynamic profiles — holds against a remote
 open model, not just Apple's on-device one.
 
-## Semantics this exercise locked in (now load-bearing in LinuxFoundation)
+## Semantics this exercise locked in (now load-bearing in ServerFoundationModels)
 
 - Dynamic profiles re-resolve **every generation round**, so tools that
   mutate state mid-loop (skill activation) refresh the next request's
@@ -58,6 +58,6 @@ upstream.
 
 ## Known cross-import note
 
-LinuxFoundation ships its own `ChatCompletionsLanguageModel` (so Linux works
+ServerFoundationModels ships its own `ChatCompletionsLanguageModel` (so Linux works
 without extra packages). Code importing both modules disambiguates with a
 typealias or module selector.

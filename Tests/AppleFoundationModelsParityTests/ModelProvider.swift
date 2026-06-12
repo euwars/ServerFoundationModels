@@ -1,5 +1,5 @@
 // Apple-side model provider: the local on-device Apple model.
-// This target intentionally does NOT depend on LinuxFoundation, so the
+// This target intentionally does NOT depend on ServerFoundationModels, so the
 // shared scenario file resolves `import FoundationModels`.
 
 #if canImport(FoundationModels)

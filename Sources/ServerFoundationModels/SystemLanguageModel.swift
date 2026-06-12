@@ -1,7 +1,7 @@
 // SystemLanguageModel — the platform's local on-device model.
 //
 // On Apple platforms this bridges to Apple's FoundationModels on-device model
-// through the LanguageModelExecutor contract: the same LinuxFoundation session
+// through the LanguageModelExecutor contract: the same ServerFoundationModels session
 // code drives Apple's model with no API difference. On Linux the model reports
 // `.unavailable` (the on-device model is Apple-OS-bound); use
 // ChatCompletionsLanguageModel against a local server instead.
@@ -393,7 +393,7 @@ extension SystemLanguageModel.Executor {
                 await channel.send(.response(action: .updateUsage(input: converted.input, output: converted.output)))
             }
             // Tool executions happened natively inside Apple's session; relay
-            // them so the LinuxFoundation transcript records them faithfully.
+            // them so the ServerFoundationModels transcript records them faithfully.
             for call in await recorder.calls {
                 await channel.send(RecordedToolExecution(
                     id: call.id, toolName: call.toolName,
@@ -563,8 +563,8 @@ private actor BridgedToolRecorder {
     }
 }
 
-/// Wraps a LinuxFoundation tool as an Apple-framework tool: Apple's model
-/// calls it natively, the real LinuxFoundation tool closure executes, and the
+/// Wraps a ServerFoundationModels tool as an Apple-framework tool: Apple's model
+/// calls it natively, the real ServerFoundationModels tool closure executes, and the
 /// invocation is recorded for transcript reconstruction.
 private struct BridgedTool: FoundationModels.Tool {
     typealias Arguments = FoundationModels.GeneratedContent

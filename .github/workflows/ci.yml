@@ -34,11 +34,11 @@ jobs:
           # aliasing from the macro target; the diff is the real gate.
           swift build -Xswiftc -enable-library-evolution \
             -Xswiftc -no-verify-emitted-module-interface \
-            -Xswiftc -emit-module-interface-path -Xswiftc /tmp/LinuxFoundation.swiftinterface \
-            --target LinuxFoundation
+            -Xswiftc -emit-module-interface-path -Xswiftc /tmp/ServerFoundationModels.swiftinterface \
+            --target ServerFoundationModels
           apt-get update -qq && apt-get install -y -qq python3 > /dev/null
           python3 scripts/interface-diff.py \
-            reference/FoundationModels-macOS27.swiftinterface /tmp/LinuxFoundation.swiftinterface
+            reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 
   # Full parity suite (both libraries, on-device model) runs on macOS 27
   # runners with Apple Intelligence enabled; documented for self-hosted use.

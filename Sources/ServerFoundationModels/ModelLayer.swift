@@ -336,7 +336,7 @@ public enum LanguageModelError: LocalizedError, CustomDebugStringConvertible {
     public var errorDescription: String? { debugDescription }
 }
 
-/// LinuxFoundation-specific transport/configuration failures (not part of
+/// ServerFoundationModels-specific transport/configuration failures (not part of
 /// Apple's error taxonomy).
 public struct LanguageModelTransportError: Error, CustomStringConvertible {
     public let statusCode: Int

@@ -1,6 +1,6 @@
-// Smoke test: LinuxFoundation inside a Vapor request handler.
+// Smoke test: ServerFoundationModels inside a Vapor request handler.
 import Vapor
-import LinuxFoundation
+import ServerFoundationModels
 
 func smokeModel() -> ChatCompletionsLanguageModel {
     ChatCompletionsLanguageModel(

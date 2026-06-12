@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""API parity audit: Apple FoundationModels (SDK 27 swiftinterface) vs LinuxFoundation sources.
+"""API parity audit: Apple FoundationModels (SDK 27 swiftinterface) vs ServerFoundationModels sources.
 
 Extracts public declarations from both sides, normalized to:
     TypePath                      (types, protocols, macros)
     TypePath.memberName           (funcs/vars/inits/cases, name-level)
-Then reports what Apple ships that LinuxFoundation lacks.
+Then reports what Apple ships that ServerFoundationModels lacks.
 """
 
 import re
@@ -13,7 +13,7 @@ import glob
 from collections import defaultdict
 
 IFACE = "reference/FoundationModels-macOS27.swiftinterface"
-OUR_SOURCES = glob.glob("Sources/LinuxFoundation/*.swift")
+OUR_SOURCES = glob.glob("Sources/ServerFoundationModels/*.swift")
 
 TYPE_KINDS = r"(?:struct|class|enum|protocol|actor)"
 MEMBER_KINDS = r"(?:func|var|let|init|case|subscript|typealias|associatedtype|macro)"
@@ -129,7 +129,7 @@ for m in apple_members:
             missing_members.append(m)
 
 print(f"Apple public types/macros: {len(apple_types)}")
-print(f"  present in LinuxFoundation: {len(present_types)}")
+print(f"  present in ServerFoundationModels: {len(present_types)}")
 print(f"  MISSING types: {len(missing_types)}")
 for t in missing_types:
     print(f"    - {t}")

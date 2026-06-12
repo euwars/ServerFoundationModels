@@ -151,7 +151,7 @@ extension Optional: SchemaTransparentType {}
 /// infinite inline expansion. The matching `$defs` entry is hoisted at
 /// render time by `GenerationSchema.jsonSchemaDocument`.
 enum SchemaCycleGuard {
-    private static let threadKey = "LinuxFoundation.SchemaCycleGuard.typesInProgress"
+    private static let threadKey = "ServerFoundationModels.SchemaCycleGuard.typesInProgress"
 
     static func node<Value: Generable>(for type: Value.Type) -> SchemaNode {
         // Wrapper types (Array, Optional) are transparent: cycles are detected

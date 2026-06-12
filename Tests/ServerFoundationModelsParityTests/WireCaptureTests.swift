@@ -8,7 +8,7 @@
 
 import Foundation
 import Testing
-import LinuxFoundation
+import ServerFoundationModels
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking

@@ -1,8 +1,8 @@
 # The 100%-match claim, and what enforces it
 
 Claim: **code written against Apple's FoundationModels (SDK 27) compiles and
-behaves identically against LinuxFoundation after changing one line —
-`import FoundationModels` → `import LinuxFoundation`.**
+behaves identically against ServerFoundationModels after changing one line —
+`import FoundationModels` → `import ServerFoundationModels`.**
 
 Five independent verification layers enforce it, each catching a class of
 divergence the others can't. All are machine-checkable; the first two run in
@@ -12,14 +12,14 @@ CI on every push.
 
 `scripts/interface-diff.py` compares Apple's `.swiftinterface` (vendored at
 `reference/FoundationModels-macOS27.swiftinterface`, verified identical to
-the iOS 27 surface) against LinuxFoundation's emitted interface, declaration
+the iOS 27 surface) against ServerFoundationModels's emitted interface, declaration
 by declaration with normalized signatures.
 
 ```sh
 swift build -Xswiftc -enable-library-evolution \
-  -Xswiftc -emit-module-interface-path -Xswiftc /tmp/LinuxFoundation.swiftinterface \
-  --target LinuxFoundation
-python3 scripts/interface-diff.py reference/FoundationModels-macOS27.swiftinterface /tmp/LinuxFoundation.swiftinterface
+  -Xswiftc -emit-module-interface-path -Xswiftc /tmp/ServerFoundationModels.swiftinterface \
+  --target ServerFoundationModels
+python3 scripts/interface-diff.py reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 ```
 
 Current state: **0 gaps across 818 Apple declarations** (with a short,
@@ -40,7 +40,7 @@ settling into the exact final text.)
 ## Layer 3 — Live behavioral parity (same model, two libraries)
 
 The same scenario file runs against Apple's framework with the local
-on-device model and against LinuxFoundation (same on-device model via the
+on-device model and against ServerFoundationModels (same on-device model via the
 bridge, or any OpenAI-compatible endpoint via `PARITY_BACKEND`). 44
 scenarios × 2 = 88 assertions of model-agnostic contracts: structured
 output, recursive schemas, guides, tool calling, session properties, dynamic
@@ -51,7 +51,7 @@ on-device model and against vLLM/qwen3-moe over the network.
 
 `scripts/compat-check.sh` clones packages written by Apple and Anthropic
 against the real framework, swaps the import, and runs their complete test
-suites against LinuxFoundation:
+suites against ServerFoundationModels:
 
 - `anthropics/ClaudeForFoundationModels` — 78/78
 - `apple/foundation-models-utilities` — 92/92 (its tests pinned down exact

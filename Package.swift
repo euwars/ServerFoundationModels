@@ -3,13 +3,13 @@ import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
-    name: "LinuxFoundation",
+    name: "ServerFoundationModels",
     platforms: [
         .macOS("27.0"),
         .iOS("27.0"),
     ],
     products: [
-        .library(name: "LinuxFoundation", targets: ["LinuxFoundation"])
+        .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"])
     ],
     traits: [
         // NIO-based HTTP transport for production Linux streaming
@@ -23,9 +23,9 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "LinuxFoundation",
+            name: "ServerFoundationModels",
             dependencies: [
-                "LinuxFoundationMacros",
+                "ServerFoundationModelsMacros",
                 .product(
                     name: "AsyncHTTPClient",
                     package: "async-http-client",
@@ -34,7 +34,7 @@ let package = Package(
             ]
         ),
         .macro(
-            name: "LinuxFoundationMacros",
+            name: "ServerFoundationModelsMacros",
             dependencies: [
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
@@ -42,16 +42,16 @@ let package = Package(
         ),
         // Oracle: the same scenarios compiled against Apple's FoundationModels,
         // running against the local on-device model. No dependency on our module,
-        // so `canImport(LinuxFoundation)` is false in this target.
+        // so `canImport(ServerFoundationModels)` is false in this target.
         .testTarget(
             name: "AppleFoundationModelsParityTests"
         ),
         // Subject: the same scenarios compiled against this package, running
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
         .testTarget(
-            name: "LinuxFoundationParityTests",
-            dependencies: ["LinuxFoundation"],
-            swiftSettings: [.define("PARITY_SUBJECT_IS_LINUX_FOUNDATION")]
+            name: "ServerFoundationModelsParityTests",
+            dependencies: ["ServerFoundationModels"],
+            swiftSettings: [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),
     ]
 )

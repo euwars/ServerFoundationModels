@@ -2,7 +2,7 @@ import SwiftCompilerPlugin
 import SwiftSyntaxMacros
 
 @main
-struct LinuxFoundationMacrosPlugin: CompilerPlugin {
+struct ServerFoundationModelsMacrosPlugin: CompilerPlugin {
     let providingMacros: [Macro.Type] = [
         GenerableMacro.self,
         GuideMacro.self,

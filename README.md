@@ -1,4 +1,4 @@
-# LinuxFoundation
+# ServerFoundationModels
 
 A drop-in, open-source re-implementation of Apple's **FoundationModels** framework
 (macOS/iOS 27 SDK surface) that runs anywhere Swift runs — including Linux.
@@ -6,7 +6,7 @@ Switching is one import line:
 
 ```diff
 - import FoundationModels
-+ import LinuxFoundation
++ import ServerFoundationModels
 ```
 
 Apple's on-device model doesn't exist off Apple platforms, so the built-in
@@ -16,7 +16,7 @@ Apple's on-device model doesn't exist off Apple platforms, so the built-in
 package plug in — exactly as they do against Apple's framework.
 
 ```swift
-import LinuxFoundation
+import ServerFoundationModels
 
 let model = ChatCompletionsLanguageModel(
     name: "qwen3.5:9b",
@@ -35,7 +35,7 @@ identical assertions, only the import differs:
 | Target | Imports | Local model under test |
 |---|---|---|
 | `AppleFoundationModelsParityTests` | `FoundationModels` (Apple) | Apple on-device `SystemLanguageModel` |
-| `LinuxFoundationParityTests` | `LinuxFoundation` (this package) | `qwen3.5:9b` via Ollama |
+| `ServerFoundationModelsParityTests` | `ServerFoundationModels` (this package) | `qwen3.5:9b` via Ollama |
 
 Scenarios assert library behavior — transcript entry sequences, structured output
 decoding, schema (`anyOf`, typed properties) enforcement, the tool-call loop
@@ -47,17 +47,17 @@ continuation — never exact model strings.
 swift test --filter AppleFoundationModelsParityTests
 
 # This library (any platform, local model server running)
-swift test --filter LinuxFoundationParityTests
+swift test --filter ServerFoundationModelsParityTests
 ```
 
 Both currently pass 14/14. The Apple run defines correct behavior; this library
 must match it, test for test.
 
-Environment overrides for the LinuxFoundation side: `PARITY_BASE_URL` (default
+Environment overrides for the ServerFoundationModels side: `PARITY_BASE_URL` (default
 `http://localhost:11434`), `PARITY_MODEL` (default `qwen3.5:9b`).
 
 > Note: if the checkout lives in an iCloud-synced folder (Desktop/Documents),
-> build outside it — `swift test --scratch-path /tmp/linuxfoundation-build` —
+> build outside it — `swift test --scratch-path /tmp/server-foundation-models-build` —
 > or codesign fails on the file-provider metadata iCloud stamps onto bundles.
 
 ## Ground truth
@@ -84,7 +84,7 @@ dangling `$ref`s), `GeneratedContent`, `GenerationSchema` +
 
 Proven against real third-party model packages: Anthropic's
 [ClaudeForFoundationModels](https://github.com/anthropics/ClaudeForFoundationModels)
-builds against LinuxFoundation with only the import swapped, and its entire
+builds against ServerFoundationModels with only the import swapped, and its entire
 unit test suite (78 tests — event translation, request building, error
 mapping, executor behavior) passes unmodified. The public executor surface
 this exercises: entry-addressed channel events (Response/Reasoning/ToolCalls

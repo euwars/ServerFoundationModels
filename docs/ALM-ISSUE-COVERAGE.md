@@ -1,9 +1,9 @@
 # AnyLanguageModel issue coverage
 
 Mapping of huggingface/AnyLanguageModel's reported failures (open + closed)
-to LinuxFoundation parity-suite coverage. Every "covered" row is asserted by
+to ServerFoundationModels parity-suite coverage. Every "covered" row is asserted by
 test code that runs byte-identical against Apple's FoundationModels and
-LinuxFoundation on the same local on-device model.
+ServerFoundationModels on the same local on-device model.
 
 | ALM issue | Failure mode | Our coverage |
 |---|---|---|

@@ -5,7 +5,7 @@
 //   Tests/AppleFoundationModelsParityTests  → `import FoundationModels`
 //       runs against Apple's local on-device model (SystemLanguageModel.default)
 //
-//   Tests/LinuxFoundationParityTests   → `import LinuxFoundation`
+//   Tests/ServerFoundationModelsParityTests   → `import ServerFoundationModels`
 //       runs against a local on-device model (ChatCompletionsLanguageModel → Ollama)
 //
 // Only the import — and which local model answers — differs. Every line of test
@@ -18,13 +18,13 @@
 import Foundation
 import Testing
 
-#if PARITY_SUBJECT_IS_LINUX_FOUNDATION
-import LinuxFoundation
+#if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS
+import ServerFoundationModels
 #elseif canImport(FoundationModels)
 import FoundationModels
 #endif
 
-#if PARITY_SUBJECT_IS_LINUX_FOUNDATION || canImport(FoundationModels)
+#if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS || canImport(FoundationModels)
 
 private let deterministic = GenerationOptions(temperature: 0)
 
@@ -513,7 +513,7 @@ struct BehaviorParityScenarios {
         )
         try await Task.sleep(for: .milliseconds(150))
 
-        // Apple rejects this with a "programmer error"; LinuxFoundation with
+        // Apple rejects this with a "programmer error"; ServerFoundationModels with
         // GenerationError.concurrentRequests. Both must refuse the request.
         await #expect(throws: (any Error).self) {
             _ = try await session.respond(to: "Quick: what is 1+1?", options: deterministic)

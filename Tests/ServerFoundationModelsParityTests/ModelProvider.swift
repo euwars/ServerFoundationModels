@@ -1,8 +1,8 @@
-// LinuxFoundation-side model provider.
+// ServerFoundationModels-side model provider.
 //
 // Both parity targets currently drive the SAME local on-device Apple model:
 // the oracle through Apple's framework directly, this target through
-// LinuxFoundation's SystemLanguageModel bridge. Same model, same scenarios —
+// ServerFoundationModels's SystemLanguageModel bridge. Same model, same scenarios —
 // every behavioral difference is attributable to the library.
 //
 // Set PARITY_BACKEND=chat-completions to instead drive a local
@@ -11,7 +11,7 @@
 // on-device model does not exist.
 
 import Foundation
-import LinuxFoundation
+import ServerFoundationModels
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -29,7 +29,7 @@ enum ParityModel {
 
     static let displayName = useChatCompletions
         ? "\(modelName) via \(baseURL.absoluteString) (ChatCompletionsLanguageModel)"
-        : "Apple on-device via LinuxFoundation.SystemLanguageModel"
+        : "Apple on-device via ServerFoundationModels.SystemLanguageModel"
 
     static func make() -> some LanguageModel {
         ChatCompletionsOrSystem(

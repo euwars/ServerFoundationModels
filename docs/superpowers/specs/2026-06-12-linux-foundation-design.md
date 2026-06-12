@@ -1,14 +1,14 @@
-# LinuxFoundation — Linux-capable FoundationModels (SDK 27) — Design
+# ServerFoundationModels — Linux-capable FoundationModels (SDK 27) — Design
 
 Date: 2026-06-12
 Status: Approved (user directed: "same exact APIs and features", test-first)
 
 ## Goal
 
-An open-source Swift package, module `LinuxFoundation`, that re-implements Apple's
+An open-source Swift package, module `ServerFoundationModels`, that re-implements Apple's
 FoundationModels framework exactly as shipped in the macOS/iOS 27 SDK — same type names,
 same signatures, same behavior — and builds and runs on Linux. Switching is one import line:
-`import FoundationModels` → `import LinuxFoundation`.
+`import FoundationModels` → `import ServerFoundationModels`.
 
 ## Ground truth
 
@@ -30,8 +30,8 @@ depending on ALM as a package (its public types collide in shape with Apple's).
 
 ## Targets
 
-- `LinuxFoundation` — full API surface.
-- `LinuxFoundationMacros` — `@Generable`, `@Guide`, `@SessionPropertyEntry`.
+- `ServerFoundationModels` — full API surface.
+- `ServerFoundationModelsMacros` — `@Generable`, `@Guide`, `@SessionPropertyEntry`.
 - Test targets — see Parity harness.
 
 Swift 6.2+ tools, `swiftLanguageMode(.v6)`. Platforms: Linux (primary CI) + macOS/iOS.
@@ -50,11 +50,11 @@ One shared scenario file, compiled into two test targets via symlink; only the i
 
 ```
 TestScenarios/ParityScenarios.swift          # canonical; conditional import:
-                                             #   #if canImport(LinuxFoundation) ours #else FoundationModels
+                                             #   #if canImport(ServerFoundationModels) ours #else FoundationModels
 Tests/AppleFoundationModelsParityTests/      # NO dep on our module → imports Apple's framework
     Scenarios.swift -> symlink               # model: SystemLanguageModel.default (local, on-device)
     ModelProvider.swift
-Tests/LinuxFoundationParityTests/       # depends on LinuxFoundation
+Tests/ServerFoundationModelsParityTests/       # depends on ServerFoundationModels
     Scenarios.swift -> symlink               # model: ChatCompletionsLanguageModel → local Ollama
     ModelProvider.swift                      #   (qwen3.5:9b @ http://localhost:11434)
 ```

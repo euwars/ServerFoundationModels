@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Signature-level parity gate.
 
-Compares Apple's FoundationModels .swiftinterface against LinuxFoundation's
+Compares Apple's FoundationModels .swiftinterface against ServerFoundationModels's
 emitted .swiftinterface, declaration by declaration, with normalized
 signatures (module qualifiers, attributes, availability, and cosmetic
 modifiers stripped). Reports:
-  - Apple declarations missing from LinuxFoundation (parity gaps)
+  - Apple declarations missing from ServerFoundationModels (parity gaps)
   - declarations whose normalized signature differs
 
 Usage: interface-diff.py <apple.swiftinterface> <ours.swiftinterface>
@@ -47,7 +47,7 @@ COSMETIC = [
 
 def normalize(line):
     line = re.sub(r"\b[A-Za-z_][\w]*::", "", line)          # Module:: qualifiers
-    line = re.sub(r"\b(FoundationModels|LinuxFoundation|Swift|FoundationEssentials|FoundationNetworking|FoundationInternationalization|Foundation|CoreGraphics|CoreImage|CoreVideo|ImageIO|Observation|_Concurrency|_StringProcessing|Darwin|CoreFoundation)\.", "", line)
+    line = re.sub(r"\b(FoundationModels|ServerFoundationModels|Swift|FoundationEssentials|FoundationNetworking|FoundationInternationalization|Foundation|CoreGraphics|CoreImage|CoreVideo|ImageIO|Observation|_Concurrency|_StringProcessing|Darwin|CoreFoundation)\.", "", line)
     for pattern in COSMETIC:
         line = re.sub(pattern, "", line)
     line = re.sub(r"\b(consuming|borrowing|isolated|mutating|nonmutating)\s+", "", line)
