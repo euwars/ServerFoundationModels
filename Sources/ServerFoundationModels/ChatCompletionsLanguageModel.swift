@@ -107,8 +107,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 ])
                 if response.statusCode == 429 {
                     let resetDate = response.value(forHTTPHeaderField: "Retry-After")
-                        .flatMap(Double.init)
-                        .map { Date(timeIntervalSinceNow: $0) }
+                        .flatMap(Self.parseRetryAfter)
                     throw LanguageModelError.rateLimited(.init(resetDate: resetDate, debugDescription: body))
                 }
                 // Providers report context overflow as a 400/413 mentioning
@@ -125,73 +124,169 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             }
 
             // Accumulates streamed tool-call fragments by choice index.
-            var toolCalls: [Int: (id: String, name: String, arguments: String)] = [:]
+            var toolCalls = ToolCallAccumulator()
+            // SSE event assembly: consecutive `data:` lines belong to one
+            // event and are joined with "\n"; a blank line dispatches it.
+            var pendingData: [String] = []
+            var isFirstLine = true
 
-            for try await line in lines {
-                guard line.hasPrefix("data:") else { continue }
-                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                if payload == "[DONE]" { break }
-                guard let chunk = try? JSONNode.parse(payload) else {
-                    // Frame content is provider JSON, not user text, but log
-                    // only its size to keep the no-content guarantee simple.
-                    logger.debug("skipping malformed SSE frame", metadata: [
-                        "bytes": .stringConvertible(payload.utf8.count)
-                    ])
+            for try await rawLine in lines {
+                var line = Substring(rawLine)
+                if isFirstLine {
+                    isFirstLine = false
+                    // A single leading U+FEFF BOM at stream start is ignored.
+                    if line.first == "\u{FEFF}" { line.removeFirst() }
+                }
+                if line.isEmpty {
+                    guard !pendingData.isEmpty else { continue }
+                    let payload = pendingData.joined(separator: "\n")
+                    pendingData.removeAll()
+                    if try await processEvent(payload, toolCalls: &toolCalls, channel: channel, logger: logger) {
+                        break
+                    }
                     continue
                 }
-
-                let delta = chunk["choices"]?[0]?["delta"]
-                if case .string(let content) = delta?["content"], !content.isEmpty {
-                    await channel.send(.response(action: .appendText(content, tokenCount: 0)))
-                }
-                for reasoningKey in ["reasoning", "reasoning_content"] {
-                    if case .string(let reasoning) = delta?[reasoningKey], !reasoning.isEmpty {
-                        await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
-                    }
-                }
-                if let usage = chunk["usage"], case .object = usage {
-                    func intValue(_ node: JSONNode?) -> Int {
-                        if case .integer(let value) = node { return value }
-                        return 0
-                    }
-                    await channel.send(.response(action: .updateUsage(
-                        input: .init(
-                            totalTokenCount: intValue(usage["prompt_tokens"]),
-                            cachedTokenCount: intValue(usage["prompt_tokens_details"]?["cached_tokens"])
-                        ),
-                        output: .init(
-                            totalTokenCount: intValue(usage["completion_tokens"]),
-                            reasoningTokenCount: intValue(usage["completion_tokens_details"]?["reasoning_tokens"])
-                        )
-                    )))
-                }
-                if case .array(let calls) = delta?["tool_calls"] {
-                    for call in calls {
-                        var index = 0
-                        if case .integer(let i) = call["index"] { index = i }
-                        var accumulated = toolCalls[index] ?? (id: "", name: "", arguments: "")
-                        if case .string(let id) = call["id"], !id.isEmpty {
-                            accumulated.id = id
-                        }
-                        if case .string(let name) = call["function"]?["name"], !name.isEmpty {
-                            accumulated.name = name
-                        }
-                        if case .string(let fragment) = call["function"]?["arguments"] {
-                            accumulated.arguments += fragment
-                        }
-                        toolCalls[index] = accumulated
-                    }
-                }
+                guard line.hasPrefix("data:") else { continue }
+                var value = line.dropFirst(5)
+                if value.first == " " { value.removeFirst() }
+                pendingData.append(String(value))
+            }
+            // A final event the stream closed without terminating: process it
+            // anyway so providers that omit the trailing blank line still work.
+            if !pendingData.isEmpty {
+                let payload = pendingData.joined(separator: "\n")
+                _ = try await processEvent(payload, toolCalls: &toolCalls, channel: channel, logger: logger)
             }
 
-            for index in toolCalls.keys.sorted() {
-                let call = toolCalls[index]!
+            for index in toolCalls.calls.keys.sorted() {
+                let call = toolCalls.calls[index]!
                 await channel.send(.toolCalls(action: .toolCall(
                     id: call.id.isEmpty ? UUID().uuidString : call.id,
                     name: call.name,
                     action: .appendArguments(call.arguments, tokenCount: 0)
                 )))
             }
+        }
+
+        /// Handles one assembled SSE event payload. Returns `true` when the
+        /// stream is finished (`[DONE]`).
+        private func processEvent(
+            _ payload: String,
+            toolCalls: inout ToolCallAccumulator,
+            channel: LanguageModelExecutorGenerationChannel,
+            logger: Logger
+        ) async throws -> Bool {
+            if payload.trimmingCharacters(in: .whitespaces) == "[DONE]" { return true }
+            guard let chunk = try? JSONNode.parse(payload) else {
+                // Frame content is provider JSON, not user text, but log
+                // only its size to keep the no-content guarantee simple.
+                logger.debug("skipping malformed SSE frame", metadata: [
+                    "bytes": .stringConvertible(payload.utf8.count)
+                ])
+                return false
+            }
+
+            let choice = chunk["choices"]?[0]
+            let delta = choice?["delta"]
+            if case .string(let content) = delta?["content"], !content.isEmpty {
+                await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+            }
+            for reasoningKey in ["reasoning", "reasoning_content"] {
+                if case .string(let reasoning) = delta?[reasoningKey], !reasoning.isEmpty {
+                    await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
+                }
+            }
+            if let usage = chunk["usage"], case .object = usage {
+                func intValue(_ node: JSONNode?) -> Int {
+                    if case .integer(let value) = node { return value }
+                    // Some providers serialize token counts as JSON floats
+                    // (e.g. "prompt_tokens": 57.0); accept integral doubles.
+                    if case .number(let value) = node, let exact = Int(exactly: value) { return exact }
+                    return 0
+                }
+                await channel.send(.response(action: .updateUsage(
+                    input: .init(
+                        totalTokenCount: intValue(usage["prompt_tokens"]),
+                        cachedTokenCount: intValue(usage["prompt_tokens_details"]?["cached_tokens"])
+                    ),
+                    output: .init(
+                        totalTokenCount: intValue(usage["completion_tokens"]),
+                        reasoningTokenCount: intValue(usage["completion_tokens_details"]?["reasoning_tokens"])
+                    )
+                )))
+            }
+            if case .array(let calls) = delta?["tool_calls"] {
+                toolCalls.ingest(calls)
+            }
+            if case .string(let finishReason) = choice?["finish_reason"] {
+                switch finishReason {
+                case "content_filter":
+                    // The provider's safety system stopped generation.
+                    throw LanguageModelError.guardrailViolation(.init(
+                        debugDescription: "provider stopped generation with finish_reason=content_filter"
+                    ))
+                case "length":
+                    logger.warning("response truncated by provider", metadata: [
+                        "finish_reason": .string("length")
+                    ])
+                default:
+                    break
+                }
+            }
+            return false
+        }
+
+        /// Merges streamed tool-call delta fragments into complete calls.
+        ///
+        /// With an `index` field the provider addresses calls explicitly.
+        /// Without one, an element carrying an `id` starts a NEW call
+        /// (monotonic counter); elements with neither `id` nor `index`
+        /// append arguments to the most recent call.
+        struct ToolCallAccumulator {
+            private(set) var calls: [Int: (id: String, name: String, arguments: String)] = [:]
+            private var nextSyntheticIndex = 0
+            private var lastIndex: Int?
+
+            mutating func ingest(_ elements: [JSONNode]) {
+                for call in elements {
+                    let index: Int
+                    if case .integer(let explicit) = call["index"] {
+                        index = explicit
+                        nextSyntheticIndex = max(nextSyntheticIndex, explicit + 1)
+                    } else if case .string(let id) = call["id"], !id.isEmpty {
+                        index = nextSyntheticIndex
+                        nextSyntheticIndex += 1
+                    } else {
+                        index = lastIndex ?? 0
+                    }
+                    lastIndex = index
+
+                    var accumulated = calls[index] ?? (id: "", name: "", arguments: "")
+                    if case .string(let id) = call["id"], !id.isEmpty {
+                        accumulated.id = id
+                    }
+                    if case .string(let name) = call["function"]?["name"], !name.isEmpty {
+                        accumulated.name = name
+                    }
+                    if case .string(let fragment) = call["function"]?["arguments"] {
+                        accumulated.arguments += fragment
+                    }
+                    calls[index] = accumulated
+                }
+            }
+        }
+
+        /// RFC 7231 `Retry-After`: either delta-seconds or an HTTP-date.
+        static func parseRetryAfter(_ value: String) -> Date? {
+            let trimmed = value.trimmingCharacters(in: .whitespaces)
+            if let seconds = Double(trimmed) {
+                return Date(timeIntervalSinceNow: seconds)
+            }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "GMT")
+            return formatter.date(from: trimmed)
         }
 
         // MARK: Request construction
@@ -205,15 +300,27 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             for (header, value) in configuration.additionalHeaders {
                 urlRequest.setValue(value, forHTTPHeaderField: header)
             }
-            let body = makeBody(for: request).serialized
-            if ProcessInfo.processInfo.environment["LF_DEBUG"] != nil {
-                FileHandle.standardError.write(Data("LF_DEBUG body: \(body)\n".utf8))
+            let bodyNode = makeBody(for: request)
+            // getenv (not ProcessInfo) so the flag is honored even when set
+            // after process start (Darwin caches ProcessInfo's environment).
+            if getenv("LF_DEBUG") != nil {
+                // Redacted dump: structure stays visible, but prompt /
+                // instruction / tool content never reaches stderr (this
+                // file's no-content-logging guarantee).
+                FileHandle.standardError.write(Data("LF_DEBUG body: \(bodyNode.redactingContent().serialized)\n".utf8))
             }
-            urlRequest.httpBody = Data(body.utf8)
+            urlRequest.httpBody = Data(bodyNode.serialized.utf8)
             return urlRequest
         }
 
         var endpoint: URL {
+            // A URL that already names the chat completions endpoint is
+            // used verbatim — never doubled.
+            var path = configuration.url.path
+            while path.hasSuffix("/") { path.removeLast() }
+            if path.hasSuffix("/chat/completions") {
+                return configuration.url
+            }
             if configuration.url.pathComponents.contains("v1") {
                 return configuration.url.appendingPathComponent("chat/completions")
             }
@@ -248,6 +355,26 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             if let maximum = options.maximumResponseTokens {
                 members.append(.init(key: "max_tokens", value: .integer(maximum)))
             }
+            if let samplingMode = options.samplingMode {
+                switch samplingMode.kind {
+                case .greedy:
+                    // Deterministic decoding; an explicit temperature wins.
+                    if options.temperature == nil {
+                        members.append(.init(key: "temperature", value: .integer(0)))
+                    }
+                case .nucleus(let threshold, let seed):
+                    members.append(.init(key: "top_p", value: .number(threshold)))
+                    if let seed, let exact = Int(exactly: seed) {
+                        members.append(.init(key: "seed", value: .integer(exact)))
+                    }
+                case .top(_, let seed):
+                    // top-k has no standard chat-completions field; the seed
+                    // still rides the request.
+                    if let seed, let exact = Int(exactly: seed) {
+                        members.append(.init(key: "seed", value: .integer(exact)))
+                    }
+                }
+            }
 
             if !request.enabledToolDefinitions.isEmpty {
                 let tools = request.enabledToolDefinitions.map { definition in
@@ -261,6 +388,15 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     ])
                 }
                 members.append(.init(key: "tools", value: .array(tools)))
+            }
+            if let toolCallingMode = options.toolCallingMode {
+                let choice: String
+                switch toolCallingMode.kind {
+                case .allowed: choice = "auto"
+                case .required: choice = "required"
+                case .disallowed: choice = "none"
+                }
+                members.append(.init(key: "tool_choice", value: .string(choice)))
             }
 
             if let schema = request.schema, configuration.supportsGuidedGeneration {
@@ -338,6 +474,27 @@ extension JSONNode {
         guard case .array(let elements) = self, elements.indices.contains(index) else { return nil }
         return elements[index]
     }
+
+    /// Returns a copy with every string value under a "content" or
+    /// "arguments" key replaced by "<redacted, N chars>". Keeps the request
+    /// structure visible in debug dumps without leaking prompt, instruction,
+    /// response, or tool-argument text.
+    func redactingContent() -> JSONNode {
+        switch self {
+        case .array(let elements):
+            return .array(elements.map { $0.redactingContent() })
+        case .object(let members):
+            return .object(members.map { member in
+                if member.key == "content" || member.key == "arguments",
+                    case .string(let text) = member.value {
+                    return Member(key: member.key, value: .string("<redacted, \(text.count) chars>"))
+                }
+                return Member(key: member.key, value: member.value.redactingContent())
+            })
+        default:
+            return self
+        }
+    }
 }
 
 
@@ -357,8 +514,22 @@ enum HTTPLineStream {
         let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
         let task = Task {
             do {
-                for try await line in bytes.lines {
-                    continuation.yield(line)
+                // Manual 0x0A byte splitting, matching the Linux and
+                // AsyncHTTPClient transports: `bytes.lines` would also split
+                // on U+2028/U+2029/NEL, which may legally occur inside JSON
+                // string content.
+                var buffer = [UInt8]()
+                for try await byte in bytes {
+                    if byte == 0x0A {
+                        continuation.yield(String(decoding: buffer, as: UTF8.self)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                        buffer.removeAll(keepingCapacity: true)
+                    } else {
+                        buffer.append(byte)
+                    }
+                }
+                if !buffer.isEmpty {
+                    continuation.yield(String(decoding: buffer, as: UTF8.self))
                 }
                 continuation.finish()
             } catch {
@@ -564,7 +735,12 @@ extension HTTPLineStream {
             httpRequest.body = .bytes(ByteBuffer(bytes: body))
         }
 
-        let response = try await HTTPClient.shared.execute(httpRequest, timeout: .seconds(Int64(request.timeoutInterval)))
+        // Semantic difference: URLRequest.timeoutInterval is URLSession's
+        // idle (between-bytes) timeout, while AsyncHTTPClient's `timeout` is
+        // a total deadline for the whole request. Millisecond precision so
+        // sub-second values are not truncated to 0.
+        let timeout = TimeAmount.milliseconds(Int64((request.timeoutInterval * 1000).rounded()))
+        let response = try await HTTPClient.shared.execute(httpRequest, timeout: timeout)
         guard let httpResponse = HTTPURLResponse(
             url: url, statusCode: Int(response.status.code), httpVersion: nil,
             headerFields: Dictionary(response.headers.map { ($0.name, $0.value) }, uniquingKeysWith: { first, _ in first })
