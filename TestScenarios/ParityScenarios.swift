@@ -206,6 +206,52 @@ struct BehaviorParityScenarios {
         #expect(!response.content.isEmpty)
         #expect(session.isResponding == false)
     }
+
+    @Test("respond(generating:) decodes @Generable types nested two array layers deep")
+    func generableDeepNesting() async throws {
+        // Regression target: arrays of structs containing arrays of structs.
+        // Schema references ($ref without $defs) broke this in other
+        // FoundationModels clones; schemas here must be fully inlined.
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Create a two-day travel plan for Tokyo with one or two activities per day.",
+            generating: TravelPlan.self,
+            options: deterministic
+        )
+
+        let plan = response.content
+        #expect(!plan.city.isEmpty)
+        #expect(!plan.days.isEmpty)
+        #expect(plan.days.allSatisfy { !$0.activities.isEmpty })
+        #expect(plan.days.flatMap(\.activities).allSatisfy { !$0.name.isEmpty })
+    }
+
+    @Test("respond(generating:) decodes a recursive @Generable type (object nesting its own type)")
+    func generableRecursiveType() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Describe a tiny project folder: a root folder named src containing one subfolder named utils, which contains one file named helpers. Files have no children.",
+            generating: FileNode.self,
+            options: deterministic
+        )
+
+        let root = response.content
+        #expect(!root.name.isEmpty)
+        #expect(!root.children.isEmpty)
+        // At least two levels of self-nesting decoded.
+        #expect(root.children.contains { !$0.children.isEmpty })
+    }
+
+    @Test("@Guide anyOf constrains a generated @Generable property")
+    func generableGuideAnyOf() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "What color is a clear daytime sky?",
+            generating: SkyReport.self,
+            options: deterministic
+        )
+        #expect(["red", "blue", "green", "yellow"].contains(response.content.color))
+    }
 }
 
 // MARK: - API parity (no model required — pure library semantics)
@@ -267,6 +313,40 @@ struct APIParityScenarios {
         _ = instructions
     }
 
+    @Test("recursive @Generable schema construction terminates and values round-trip")
+    func generableRecursiveRoundTrip() throws {
+        // Schema construction must not recurse forever on self-referential types.
+        _ = FileNode.generationSchema
+
+        let tree = FileNode(name: "src", children: [
+            FileNode(name: "utils", children: [
+                FileNode(name: "helpers", children: [])
+            ]),
+            FileNode(name: "main", children: []),
+        ])
+        let restored = try FileNode(try GeneratedContent(json: tree.generatedContent.jsonString))
+        #expect(restored == tree)
+    }
+
+    @Test("@Generable values round-trip through GeneratedContent, two layers deep")
+    func generableRoundTrip() throws {
+        let plan = TravelPlan(
+            city: "Lisbon",
+            days: [
+                TravelDay(dayNumber: 1, activities: [
+                    TravelActivity(name: "Tram 28 ride", durationMinutes: 60),
+                    TravelActivity(name: "Castle walk", durationMinutes: 120),
+                ]),
+                TravelDay(dayNumber: 2, activities: [
+                    TravelActivity(name: "Tile museum", durationMinutes: 90)
+                ]),
+            ]
+        )
+
+        let restored = try TravelPlan(try GeneratedContent(json: plan.generatedContent.jsonString))
+        #expect(restored == plan)
+    }
+
     @Test("Transcript behaves as a RandomAccessCollection of entries")
     func transcriptCollectionSemantics() {
         let empty = Transcript()
@@ -281,6 +361,46 @@ struct APIParityScenarios {
             Issue.record("expected the first entry to be a prompt")
         }
     }
+}
+
+// MARK: - Shared @Generable fixtures
+
+@Generable(description: "A short travel activity")
+struct TravelActivity: Equatable {
+    @Guide(description: "Short name of the activity")
+    var name: String
+    @Guide(description: "Duration in minutes", .range(15...240))
+    var durationMinutes: Int
+}
+
+@Generable(description: "One day of a travel plan")
+struct TravelDay: Equatable {
+    @Guide(description: "Day number, starting at 1", .minimum(1))
+    var dayNumber: Int
+    @Guide(description: "Activities planned for this day", .minimumCount(1))
+    var activities: [TravelActivity]
+}
+
+@Generable(description: "A complete travel plan for one city")
+struct TravelPlan: Equatable {
+    @Guide(description: "Name of the destination city")
+    var city: String
+    @Guide(description: "The days of the plan", .count(2))
+    var days: [TravelDay]
+}
+
+@Generable(description: "A node in a file tree: a file or a folder")
+struct FileNode: Equatable {
+    @Guide(description: "Name of the file or folder")
+    var name: String
+    @Guide(description: "Child nodes; empty for plain files", .maximumCount(3))
+    var children: [FileNode]
+}
+
+@Generable(description: "A report about the sky")
+struct SkyReport: Equatable {
+    @Guide(description: "The color of the sky", .anyOf(["red", "blue", "green", "yellow"]))
+    var color: String
 }
 
 // MARK: - Shared test fixtures

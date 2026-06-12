@@ -47,7 +47,7 @@ extension String: Generable {
     }
 
     public static var generationSchema: GenerationSchema {
-        GenerationSchema(node: .string(description: nil, enumChoices: nil))
+        GenerationSchema(node: .string(description: nil, enumChoices: nil, pattern: nil))
     }
 
     public var generatedContent: GeneratedContent {
@@ -73,7 +73,7 @@ extension Int: Generable {
     }
 
     public static var generationSchema: GenerationSchema {
-        GenerationSchema(node: .integer(description: nil))
+        GenerationSchema(node: .integer(description: nil, minimum: nil, maximum: nil))
     }
 
     public var generatedContent: GeneratedContent {
@@ -113,11 +113,61 @@ extension Double: Generable {
     }
 
     public static var generationSchema: GenerationSchema {
-        GenerationSchema(node: .number(description: nil))
+        GenerationSchema(node: .number(description: nil, minimum: nil, maximum: nil))
     }
 
     public var generatedContent: GeneratedContent {
         GeneratedContent(node: .number(self))
+    }
+}
+
+// MARK: - Array
+
+// MARK: - Never
+
+// Uninhabited, but Generable so `@Guide` array guides type-check in attribute
+// position via GenerationGuide<[Never]> — matching Apple's framework.
+extension Never: Generable {
+    public init(_ content: GeneratedContent) throws {
+        throw GeneratedContentError("Never cannot be instantiated")
+    }
+
+    public static var generationSchema: GenerationSchema {
+        GenerationSchema(node: .object(name: "Never", description: nil, properties: []))
+    }
+
+    public var generatedContent: GeneratedContent {
+        switch self {}
+    }
+}
+
+// MARK: - Optional
+
+extension Optional: ConvertibleFromGeneratedContent where Wrapped: ConvertibleFromGeneratedContent {
+    public init(_ content: GeneratedContent) throws {
+        if case .null = content.node {
+            self = nil
+        } else {
+            self = try Wrapped(content)
+        }
+    }
+}
+
+extension Optional: PromptRepresentable where Wrapped: ConvertibleToGeneratedContent {}
+extension Optional: InstructionsRepresentable where Wrapped: ConvertibleToGeneratedContent {}
+
+extension Optional: ConvertibleToGeneratedContent where Wrapped: ConvertibleToGeneratedContent {
+    public var generatedContent: GeneratedContent {
+        switch self {
+        case .some(let wrapped): return wrapped.generatedContent
+        case .none: return GeneratedContent(node: .null)
+        }
+    }
+}
+
+extension Optional: Generable where Wrapped: Generable {
+    public static var generationSchema: GenerationSchema {
+        Wrapped.generationSchema
     }
 }
 
@@ -145,7 +195,7 @@ extension Array: Generable where Element: Generable {
     public static var generationSchema: GenerationSchema {
         GenerationSchema(node: .array(
             description: nil,
-            item: Element.generationSchema.root,
+            item: SchemaCycleGuard.node(for: Element.self),
             minimumElements: nil,
             maximumElements: nil
         ))

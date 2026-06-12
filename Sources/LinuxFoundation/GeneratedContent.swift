@@ -62,6 +62,22 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
         return try Value(GeneratedContent(node: member.value))
     }
 
+    /// Optional property access: returns nil when the property is absent or
+    /// explicitly null, instead of throwing.
+    public func value<Value>(
+        _ type: Value?.Type = Value?.self,
+        forProperty property: String
+    ) throws -> Value? where Value: ConvertibleFromGeneratedContent {
+        guard case .object(let members) = node else {
+            throw GeneratedContentError("content is not an object; cannot read property '\(property)'")
+        }
+        guard let member = members.first(where: { $0.key == property }) else {
+            return nil
+        }
+        if case .null = member.value { return nil }
+        return try Value(GeneratedContent(node: member.value))
+    }
+
     public var debugDescription: String { "GeneratedContent(\(node.serialized))" }
 
     public static func == (lhs: GeneratedContent, rhs: GeneratedContent) -> Bool {

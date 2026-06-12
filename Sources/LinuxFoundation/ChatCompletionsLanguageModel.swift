@@ -132,7 +132,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             for (header, value) in configuration.additionalHeaders {
                 urlRequest.setValue(value, forHTTPHeaderField: header)
             }
-            urlRequest.httpBody = Data(makeBody(for: request).serialized.utf8)
+            let body = makeBody(for: request).serialized
+            if ProcessInfo.processInfo.environment["LF_DEBUG"] != nil {
+                FileHandle.standardError.write(Data("LF_DEBUG body: \(body)\n".utf8))
+            }
+            urlRequest.httpBody = Data(body.utf8)
             return urlRequest
         }
 
@@ -165,7 +169,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                         .init(key: "function", value: .object([
                             .init(key: "name", value: .string(definition.name)),
                             .init(key: "description", value: .string(definition.description)),
-                            .init(key: "parameters", value: definition.parameters.root.jsonSchema),
+                            .init(key: "parameters", value: definition.parameters.jsonSchemaDocument),
                         ])),
                     ])
                 }
@@ -178,7 +182,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     .init(key: "json_schema", value: .object([
                         .init(key: "name", value: .string("response")),
                         .init(key: "strict", value: .bool(true)),
-                        .init(key: "schema", value: schema.root.jsonSchema),
+                        .init(key: "schema", value: schema.jsonSchemaDocument),
                     ])),
                 ])))
             }

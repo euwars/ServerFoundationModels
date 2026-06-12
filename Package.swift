@@ -1,4 +1,5 @@
 // swift-tools-version: 6.2
+import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
@@ -10,9 +11,20 @@ let package = Package(
     products: [
         .library(name: "LinuxFoundation", targets: ["LinuxFoundation"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0")
+    ],
     targets: [
         .target(
-            name: "LinuxFoundation"
+            name: "LinuxFoundation",
+            dependencies: ["LinuxFoundationMacros"]
+        ),
+        .macro(
+            name: "LinuxFoundationMacros",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+            ]
         ),
         // Oracle: the same scenarios compiled against Apple's FoundationModels,
         // running against the local on-device model. No dependency on our module,

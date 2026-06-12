@@ -157,6 +157,43 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
     }
 
+    // MARK: Respond — typed Generable
+
+    public func respond<Content>(
+        to prompt: String,
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<Content> where Content: Generable {
+        try await withRespondingFlag {
+            let preCount = transcript.count
+            let schema = Content.generationSchema
+            appendEntry(.prompt(Transcript.Prompt(
+                segments: [.text(.init(content: prompt))],
+                options: options,
+                responseFormat: Transcript.ResponseFormat(schema: schema)
+            )))
+
+            let text = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
+            let raw: GeneratedContent
+            do {
+                raw = try GeneratedContent(json: Self.stripCodeFences(from: text))
+            } catch {
+                throw GeneratedContentError("response was not valid JSON (\(error)); response text: '\(text.prefix(2000))'")
+            }
+            let content = try Content(raw)
+
+            appendEntry(.response(Transcript.Response(
+                segments: [.structure(.init(content: raw))]
+            )))
+            return Response(
+                content: content,
+                rawContent: raw,
+                transcriptEntries: transcript.allEntries[preCount...]
+            )
+        }
+    }
+
     // MARK: Streaming
 
     public func streamResponse(
