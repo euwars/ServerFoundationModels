@@ -79,14 +79,24 @@ struct BehaviorParityScenarios {
                         instructions: "Answer with a single short word."
                     )
                     for round in 0..<rounds {
+                        // Generous token bound: reasoning models spend their
+                        // budget thinking before any content arrives.
                         let response = try await session.respond(
                             to: "Say ok (worker \(worker), round \(round))",
-                            options: GenerationOptions(temperature: 0, maximumResponseTokens: 64)
+                            options: GenerationOptions(temperature: 0, maximumResponseTokens: 512)
                         )
                         #expect(!response.content.isEmpty)
                     }
-                    // Instructions + one prompt and one response per round.
-                    #expect(session.transcript.count == 1 + rounds * 2)
+                    // Reasoning models may interleave extra entries; assert
+                    // the invariant shape instead of an exact count.
+                    let entries = Array(session.transcript)
+                    if case .instructions = entries.first {} else {
+                        Issue.record("first transcript entry should be instructions")
+                    }
+                    let prompts = entries.filter { if case .prompt = $0 { return true }; return false }
+                    let responses = entries.filter { if case .response = $0 { return true }; return false }
+                    #expect(prompts.count == rounds)
+                    #expect(responses.count == rounds)
                 }
             }
             try await group.waitForAll()
