@@ -310,6 +310,41 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
     }
 
     public init(root: DynamicGenerationSchema, dependencies: [DynamicGenerationSchema]) throws {
+        // Validate that every reference resolves within root + dependencies,
+        // and that named types are not defined twice.
+        var definedNames: [String] = []
+        func collectNames(_ node: SchemaNode) {
+            if case .object(let name, _, let properties) = node {
+                definedNames.append(name)
+                for property in properties { collectNames(property.node) }
+            } else if case .array(_, let item, _, _) = node {
+                collectNames(item)
+            }
+        }
+        collectNames(root.node)
+        for dependency in dependencies { collectNames(dependency.node) }
+
+        let duplicates = Dictionary(grouping: definedNames, by: { $0 }).filter { $1.count > 1 }
+        if let duplicate = duplicates.keys.sorted().first {
+            throw SchemaError.duplicateType(
+                schema: nil,
+                type: duplicate,
+                context: .init(debugDescription: "Duplicate type \(duplicate) in schema")
+            )
+        }
+
+        var references: Set<String> = []
+        root.node.collectReferences(into: &references)
+        for dependency in dependencies { dependency.node.collectReferences(into: &references) }
+        let unresolved = references.subtracting(definedNames).sorted()
+        if !unresolved.isEmpty {
+            throw SchemaError.undefinedReferences(
+                schema: nil,
+                references: unresolved,
+                context: .init(debugDescription: "Undefined references: \(unresolved.joined(separator: ", "))")
+            )
+        }
+
         self.root = root.node
     }
 

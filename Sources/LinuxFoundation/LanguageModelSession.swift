@@ -12,6 +12,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     private var _transcript: Transcript
     private var _isResponding = false
     private var _usage = Usage()
+    var errorPolicy: TranscriptErrorHandlingPolicy?
 
     private let tools: [ErasedTool]
     private let toolDefinitions: [Transcript.ToolDefinition]
@@ -225,12 +226,15 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             let result = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
             let raw: GeneratedContent
+            let content: Content
             do {
                 raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
+                content = try Content(raw)
             } catch {
-                throw GeneratedContentError("response was not valid JSON (\(error)); response text: '\(result.text.prefix(2000))'")
+                throw GenerationError.decodingFailure(.init(
+                    debugDescription: "failed to decode \(Content.self) from response (\(error)); response text: '\(result.text.prefix(2000))'"
+                ))
             }
-            let content = try Content(raw)
 
             appendEntry(.response(Transcript.Response(
                 segments: [.structure(.init(content: raw))]
@@ -250,7 +254,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: String,
         options: GenerationOptions = GenerationOptions()
     ) -> ResponseStream<String> {
-        let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Error>.makeStream()
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>.makeStream()
 
         Task {
             do {
@@ -467,8 +471,13 @@ public final class LanguageModelSession: @unchecked Sendable {
                 guard let tool = tools.first(where: { $0.name == call.toolName }) else {
                     throw LanguageModelTransportError(statusCode: 0, message: "the model called unregistered tool \(call.toolName)")
                 }
-                let output = try await SessionPropertyValues.$current.withValue(properties) {
-                    try await tool.call(call.arguments)
+                let output: String
+                do {
+                    output = try await SessionPropertyValues.$current.withValue(properties) {
+                        try await tool.call(call.arguments)
+                    }
+                } catch {
+                    throw ToolCallError(tool: tool.original, underlyingError: error)
                 }
                 appendEntry(.toolOutput(Transcript.ToolOutput(
                     id: call.id,
@@ -502,10 +511,36 @@ public final class LanguageModelSession: @unchecked Sendable {
         lock.unlock()
     }
 
+    private func beginResponding() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if _isResponding {
+            throw GenerationError.concurrentRequests(.init(
+                debugDescription: "The session is already responding to a request."
+            ))
+        }
+        _isResponding = true
+    }
+
     private func withRespondingFlag<T>(_ body: () async throws -> T) async throws -> T {
-        setResponding(true)
+        try beginResponding()
         defer { setResponding(false) }
-        return try await body()
+
+        let preCount = transcript.count
+        do {
+            return try await body()
+        } catch {
+            if transcriptErrorHandlingPolicy == .revertTranscript {
+                truncateTranscript(to: preCount)
+            }
+            throw error
+        }
+    }
+
+    private func truncateTranscript(to count: Int) {
+        lock.lock()
+        _transcript = Transcript(entries: _transcript.allEntries.prefix(count))
+        lock.unlock()
     }
 
     static func stripCodeFences(from text: String) -> String {
@@ -551,10 +586,10 @@ public final class LanguageModelSession: @unchecked Sendable {
 
         public typealias Element = Snapshot
 
-        let stream: AsyncThrowingStream<Snapshot, any Error>
+        let stream: AsyncThrowingStream<Snapshot, any Swift.Error>
 
         public struct AsyncIterator: AsyncIteratorProtocol {
-            var iterator: AsyncThrowingStream<Snapshot, any Error>.AsyncIterator
+            var iterator: AsyncThrowingStream<Snapshot, any Swift.Error>.AsyncIterator
 
             public mutating func next() async throws -> Snapshot? {
                 try await iterator.next()
@@ -575,12 +610,14 @@ struct ErasedTool: Sendable {
     let name: String
     let description: String
     let parameters: GenerationSchema
+    let original: any Tool
     let call: @Sendable (GeneratedContent) async throws -> String
 
     init<T: Tool>(_ tool: T) {
         self.name = tool.name
         self.description = tool.description
         self.parameters = tool.parameters
+        self.original = tool
         self.call = { content in
             let arguments = try T.Arguments(content)
             let output = try await tool.call(arguments: arguments)

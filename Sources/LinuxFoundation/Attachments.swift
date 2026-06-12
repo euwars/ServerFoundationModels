@@ -96,6 +96,55 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
         Executor.Configuration()
     }
 
+    public enum Error: LocalizedError, CustomDebugStringConvertible {
+        public struct NetworkFailure: Sendable {
+            public var debugDescription: String
+            public init(debugDescription: String) {
+                self.debugDescription = debugDescription
+            }
+        }
+
+        public struct QuotaLimitReached: Sendable {
+            public var debugDescription: String
+            public var limitIncreaseSuggestion: QuotaUsage.LimitIncreaseSuggestion?
+            public var resetDate: Date?
+            public init(
+                debugDescription: String,
+                limitIncreaseSuggestion: QuotaUsage.LimitIncreaseSuggestion? = nil,
+                resetDate: Date? = nil
+            ) {
+                self.debugDescription = debugDescription
+                self.limitIncreaseSuggestion = limitIncreaseSuggestion
+                self.resetDate = resetDate
+            }
+        }
+
+        public struct ServiceUnavailable: Sendable {
+            public var debugDescription: String
+            public init(debugDescription: String) {
+                self.debugDescription = debugDescription
+            }
+        }
+
+        case networkFailure(NetworkFailure)
+        case quotaLimitReached(QuotaLimitReached)
+        case serviceUnavailable(ServiceUnavailable)
+
+        public var debugDescription: String {
+            switch self {
+            case .networkFailure(let payload): return payload.debugDescription
+            case .quotaLimitReached(let payload): return payload.debugDescription
+            case .serviceUnavailable(let payload): return payload.debugDescription
+            }
+        }
+
+        public var errorDescription: String? { debugDescription }
+    }
+
+    public struct QuotaUsage: Sendable {
+        public struct LimitIncreaseSuggestion: Sendable {}
+    }
+
     public struct Executor: LanguageModelExecutor {
         public struct Configuration: Hashable, Sendable {
             public init() {}

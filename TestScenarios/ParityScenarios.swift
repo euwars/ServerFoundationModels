@@ -325,6 +325,23 @@ struct BehaviorParityScenarios {
         }
     }
 
+    @Test("a second request while one is in flight throws GenerationError.concurrentRequests")
+    func concurrentRequestsThrow() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        async let first = session.respond(
+            to: "Count from one to twenty in English words.",
+            options: deterministic
+        )
+        try await Task.sleep(for: .milliseconds(150))
+
+        // Apple rejects this with a "programmer error"; LinuxFoundation with
+        // GenerationError.concurrentRequests. Both must refuse the request.
+        await #expect(throws: (any Error).self) {
+            _ = try await session.respond(to: "Quick: what is 1+1?", options: deterministic)
+        }
+        _ = try await first
+    }
+
     @Test("session properties flow to tools via @SessionProperty during calls")
     func sessionPropertiesReachTools() async throws {
         let recorder = CallRecorder()
@@ -479,6 +496,38 @@ struct APIParityScenarios {
 
         let restored = try TravelPlan(try GeneratedContent(json: plan.generatedContent.jsonString))
         #expect(restored == plan)
+    }
+
+    @Test("an unresolvable schema reference throws SchemaError.undefinedReferences")
+    func schemaErrorUndefinedReferences() throws {
+        let dangling = DynamicGenerationSchema(
+            name: "Wrapper",
+            properties: [
+                .init(name: "child", schema: DynamicGenerationSchema(referenceTo: "Nowhere"))
+            ]
+        )
+        do {
+            _ = try GenerationSchema(root: dangling, dependencies: [])
+            Issue.record("expected SchemaError.undefinedReferences")
+        } catch let error as GenerationSchema.SchemaError {
+            if case .undefinedReferences(_, let references, _) = error {
+                #expect(references.contains("Nowhere"))
+            } else {
+                Issue.record("expected .undefinedReferences, got \(error)")
+            }
+        }
+    }
+
+    @Test("invalid JSON throws GeneratedContent.ParsingError carrying the raw content")
+    func parsingErrorCarriesRawContent() {
+        do {
+            _ = try GeneratedContent(json: "this is not json")
+            Issue.record("expected ParsingError")
+        } catch let error as GeneratedContent.ParsingError {
+            #expect(error.rawContent == "this is not json")
+        } catch {
+            Issue.record("expected GeneratedContent.ParsingError, got \(error)")
+        }
     }
 
     @Test("Transcript behaves as a RandomAccessCollection of entries")

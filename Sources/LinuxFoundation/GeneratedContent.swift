@@ -25,7 +25,11 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
         do {
             self.node = try JSONNode.parse(json)
         } catch {
-            throw GeneratedContentError("invalid JSON: \(error)")
+            throw ParsingError(
+                rawContent: json,
+                underlyingError: error,
+                debugDescription: "invalid JSON: \(error)"
+            )
         }
         self.complete = true
     }
