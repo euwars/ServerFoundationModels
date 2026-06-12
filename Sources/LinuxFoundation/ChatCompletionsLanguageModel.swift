@@ -93,6 +93,27 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 if case .string(let content) = delta?["content"], !content.isEmpty {
                     channel.send(.textDelta(content))
                 }
+                for reasoningKey in ["reasoning", "reasoning_content"] {
+                    if case .string(let reasoning) = delta?[reasoningKey], !reasoning.isEmpty {
+                        channel.send(.reasoningDelta(reasoning))
+                    }
+                }
+                if let usage = chunk["usage"], case .object = usage {
+                    func intValue(_ node: JSONNode?) -> Int {
+                        if case .integer(let value) = node { return value }
+                        return 0
+                    }
+                    channel.send(.usage(LanguageModelExecutorGenerationChannel.Usage(
+                        input: .init(
+                            totalTokenCount: intValue(usage["prompt_tokens"]),
+                            cachedTokenCount: intValue(usage["prompt_tokens_details"]?["cached_tokens"])
+                        ),
+                        output: .init(
+                            totalTokenCount: intValue(usage["completion_tokens"]),
+                            reasoningTokenCount: intValue(usage["completion_tokens_details"]?["reasoning_tokens"])
+                        )
+                    )))
+                }
                 if case .array(let calls) = delta?["tool_calls"] {
                     for call in calls {
                         var index = 0
@@ -151,8 +172,22 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             var members: [JSONNode.Member] = [
                 .init(key: "model", value: .string(configuration.modelName)),
                 .init(key: "stream", value: .bool(true)),
+                .init(key: "stream_options", value: .object([
+                    .init(key: "include_usage", value: .bool(true))
+                ])),
                 .init(key: "messages", value: .array(makeMessages(from: request.transcript))),
             ]
+
+            if let reasoningLevel = request.contextOptions.reasoningLevel {
+                let effort: String
+                switch reasoningLevel {
+                case .light: effort = "low"
+                case .moderate: effort = "medium"
+                case .deep: effort = "high"
+                case .custom(let value): effort = value
+                }
+                members.append(.init(key: "reasoning_effort", value: .string(effort)))
+            }
 
             let options = request.generationOptions
             if let temperature = options.temperature {

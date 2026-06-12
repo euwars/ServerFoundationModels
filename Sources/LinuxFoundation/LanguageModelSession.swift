@@ -129,13 +129,14 @@ public final class LanguageModelSession: @unchecked Sendable {
                 options: options
             )))
 
-            let text = try await generateLoop(schema: nil, options: options, onCumulativeText: nil)
+            let result = try await generateLoop(schema: nil, options: options, onCumulativeText: nil)
 
-            appendEntry(.response(Transcript.Response(segments: [.text(.init(content: text))])))
+            appendEntry(.response(Transcript.Response(segments: [.text(.init(content: result.text))])))
             return Response(
-                content: text,
-                rawContent: text.generatedContent,
-                transcriptEntries: transcript.allEntries[preCount...]
+                content: result.text,
+                rawContent: result.text.generatedContent,
+                transcriptEntries: transcript.allEntries[preCount...],
+                usage: result.usage
             )
         }
     }
@@ -156,8 +157,8 @@ public final class LanguageModelSession: @unchecked Sendable {
                 responseFormat: Transcript.ResponseFormat(schema: schema)
             )))
 
-            let text = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
-            let content = try GeneratedContent(json: Self.stripCodeFences(from: text))
+            let result = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
+            let content = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
 
             appendEntry(.response(Transcript.Response(
                 segments: [.structure(.init(content: content))]
@@ -165,7 +166,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             return Response(
                 content: content,
                 rawContent: content,
-                transcriptEntries: transcript.allEntries[preCount...]
+                transcriptEntries: transcript.allEntries[preCount...],
+                usage: result.usage
             )
         }
     }
@@ -187,12 +189,12 @@ public final class LanguageModelSession: @unchecked Sendable {
                 responseFormat: Transcript.ResponseFormat(schema: schema)
             )))
 
-            let text = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
+            let result = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
             let raw: GeneratedContent
             do {
-                raw = try GeneratedContent(json: Self.stripCodeFences(from: text))
+                raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
             } catch {
-                throw GeneratedContentError("response was not valid JSON (\(error)); response text: '\(text.prefix(2000))'")
+                throw GeneratedContentError("response was not valid JSON (\(error)); response text: '\(result.text.prefix(2000))'")
             }
             let content = try Content(raw)
 
@@ -202,7 +204,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             return Response(
                 content: content,
                 rawContent: raw,
-                transcriptEntries: transcript.allEntries[preCount...]
+                transcriptEntries: transcript.allEntries[preCount...],
+                usage: result.usage
             )
         }
     }
@@ -223,14 +226,14 @@ public final class LanguageModelSession: @unchecked Sendable {
                     options: options
                 )))
 
-                let text = try await generateLoop(schema: nil, options: options) { cumulative in
+                let result = try await generateLoop(schema: nil, options: options) { cumulative in
                     continuation.yield(ResponseStream<String>.Snapshot(
                         content: cumulative,
                         rawContent: cumulative.generatedContent
                     ))
                 }
 
-                appendEntry(.response(Transcript.Response(segments: [.text(.init(content: text))])))
+                appendEntry(.response(Transcript.Response(segments: [.text(.init(content: result.text))])))
                 setResponding(false)
                 continuation.finish()
             } catch {
@@ -246,25 +249,34 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     /// Runs executor requests until the model produces a final response,
     /// executing tool calls between rounds and recording them in the transcript.
+    struct LoopResult {
+        var text: String
+        var usage: Usage
+    }
+
     private func generateLoop(
         schema: GenerationSchema?,
         options: GenerationOptions,
         onCumulativeText: (@Sendable (String) -> Void)?
-    ) async throws -> String {
+    ) async throws -> LoopResult {
         while true {
             // Profile-based sessions re-resolve model/instructions/options
             // before every request.
             let resolved = profileResolver?()
             var requestEntries = transcript.allEntries
             if let transform = resolved?.historyTransform {
-                // The transform applies to history; the in-flight prompt (and
-                // any tool entries after it) always reach the model.
-                if let lastPrompt = requestEntries.lastIndex(where: {
-                    if case .prompt = $0 { return true }; return false
-                }) {
-                    requestEntries = transform(Array(requestEntries[..<lastPrompt])) + requestEntries[lastPrompt...]
-                } else {
-                    requestEntries = transform(requestEntries)
+                // Matching Apple: the transform receives the full request
+                // transcript (in-flight prompt included) and must keep it
+                // ending in a prompt or tool output.
+                requestEntries = transform(requestEntries)
+                switch requestEntries.last {
+                case .prompt, .toolOutput:
+                    break
+                default:
+                    throw LanguageModelError.requestFailed(
+                        statusCode: 0,
+                        message: "Transcript must end with a .prompt or .toolOutput entry."
+                    )
                 }
             }
             if let instructionsText = resolved?.instructionsText {
@@ -288,6 +300,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                 schema: schema,
                 generationOptions: effectiveOptions
             )
+            request.contextOptions = ContextOptions(reasoningLevel: resolved?.reasoningLevel)
             request.executableTools = tools
 
             let perform = resolved?.perform ?? self.perform
@@ -297,6 +310,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             var text = ""
+            var reasoning = ""
+            var usage = Usage()
             var toolCalls: [(id: String, toolName: String, argumentsJSON: String)] = []
             var recordedCalls: [Transcript.ToolCall] = []
             var recordedOutputs: [Transcript.ToolOutput] = []
@@ -305,6 +320,13 @@ public final class LanguageModelSession: @unchecked Sendable {
                 case .textDelta(let delta):
                     text += delta
                     onCumulativeText?(text)
+                case .reasoningDelta(let delta):
+                    reasoning += delta
+                case .usage(let reported):
+                    usage.input.totalTokenCount += reported.input.totalTokenCount
+                    usage.input.cachedTokenCount += reported.input.cachedTokenCount
+                    usage.output.totalTokenCount += reported.output.totalTokenCount
+                    usage.output.reasoningTokenCount += reported.output.reasoningTokenCount
                 case .toolCall(let id, let toolName, let argumentsJSON):
                     toolCalls.append((id, toolName, argumentsJSON))
                 case .recordedToolCall(let id, let toolName, let argumentsJSON):
@@ -321,6 +343,14 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
             try await executorTask.value
 
+            // The model's thinking is part of the durable record, ahead of
+            // the response it led to.
+            if !reasoning.isEmpty {
+                appendEntry(.reasoning(Transcript.Reasoning(
+                    segments: [.text(.init(content: reasoning))]
+                )))
+            }
+
             // Tool executions the executor already performed natively are
             // recorded in the transcript without re-execution.
             if !recordedCalls.isEmpty {
@@ -331,7 +361,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             if toolCalls.isEmpty {
-                return text
+                return LoopResult(text: text, usage: usage)
             }
 
             let transcriptCalls = try toolCalls.map { call in
@@ -398,6 +428,20 @@ public final class LanguageModelSession: @unchecked Sendable {
         public let content: Content
         public let rawContent: GeneratedContent
         public let transcriptEntries: ArraySlice<Transcript.Entry>
+        public let usage: Usage
+    }
+
+    public struct Usage: Sendable {
+        public struct Input: Sendable {
+            public var totalTokenCount: Int = 0
+            public var cachedTokenCount: Int = 0
+        }
+        public struct Output: Sendable {
+            public var totalTokenCount: Int = 0
+            public var reasoningTokenCount: Int = 0
+        }
+        public var input: Input = Input()
+        public var output: Output = Output()
     }
 
     public struct ResponseStream<Content>: AsyncSequence where Content: Generable {

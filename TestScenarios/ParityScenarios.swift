@@ -265,6 +265,66 @@ struct BehaviorParityScenarios {
         #expect(response.content.category == .origami)
     }
 
+    @Test("responses report token usage for input and output")
+    func tokenUsageReported() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Reply with one short sentence about otters.",
+            options: deterministic
+        )
+        #expect(response.usage.input.totalTokenCount > 0)
+        #expect(response.usage.output.totalTokenCount > 0)
+    }
+
+    @Test("history transforms shape exactly what the model sees")
+    func historyTransformInjection() async throws {
+        // The transform injects a fact that exists nowhere else; the model can
+        // only answer correctly if the transformed history reached it.
+        let session = LanguageModelSession(profile: ParityInjectionProfile())
+        let response = try await session.respond(
+            to: "What is the user's favorite animal? Answer with just the animal name.",
+            options: deterministic
+        )
+        #expect(response.content.localizedCaseInsensitiveContains("capybara"))
+    }
+
+    @Test("reasoning ('thinking') output is recorded as reasoning entries, never leaked into content")
+    func reasoningRecordedSeparately() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Which weighs more, a kilogram of feathers or a kilogram of iron? One short sentence.",
+            options: deterministic
+        )
+        #expect(!response.content.isEmpty)
+        // Models that think (e.g. qwen via the chat-completions backend)
+        // produce reasoning entries; models that don't produce none. Either
+        // way reasoning never appears as response content.
+        for entry in session.transcript {
+            if case .reasoning(let reasoning) = entry {
+                let reasoningText = plainText(reasoning.segments)
+                #expect(!reasoningText.isEmpty)
+                #expect(!response.content.contains(reasoningText))
+            }
+        }
+        if case .response = session.transcript.last {} else {
+            Issue.record("transcript should end with the response, after any reasoning entries")
+        }
+    }
+
+    @Test(".deep reasoningLevel reaches the backend (the on-device model rejects it)")
+    func deepReasoningLevel() async throws {
+        // The on-device model does not support reasoning; the request must
+        // surface that as an error rather than silently dropping the level.
+        // (Reasoning-capable backends accept the same profile.)
+        let session = LanguageModelSession(profile: ParityDeepProfile())
+        await #expect(throws: (any Error).self) {
+            _ = try await session.respond(
+                to: "What is 17 multiplied by 23? Reply with just the number.",
+                options: deterministic
+            )
+        }
+    }
+
     @Test("a dynamic profile session responds and re-resolves the profile across mode switches")
     func dynamicProfileSession() async throws {
         // Mirrors the Origami sample's orchestrator: one session, a profile
@@ -457,6 +517,13 @@ struct SkyReport: Equatable {
     var color: String
 }
 
+private func plainText(_ segments: [Transcript.Segment]) -> String {
+    segments.compactMap { segment in
+        if case .text(let text) = segment { return text.content }
+        return nil
+    }.joined(separator: "\n")
+}
+
 // MARK: - Shared dynamic-profile fixtures (Origami-shaped)
 
 final class ParityModeBox: @unchecked Sendable {
@@ -494,6 +561,35 @@ struct ParityProfile: LanguageModelSession.DynamicProfile {
                 Array(entries.suffix(4))
             }
         }
+    }
+}
+
+struct ParityInjectionProfile: LanguageModelSession.DynamicProfile {
+    var body: some DynamicProfile {
+        Profile {
+            Instructions("You answer questions about the user using the conversation history.")
+        }
+        .historyTransform { entries in
+            let injected = Transcript.Entry.response(Transcript.Response(segments: [
+                .text(Transcript.TextSegment(content: "Noted: the user's favorite animal is the capybara."))
+            ]))
+            // The transform sees the full request transcript; keep the
+            // in-flight prompt terminal.
+            if case .prompt = entries.last {
+                return entries.dropLast() + [injected, entries.last!]
+            }
+            return entries + [injected]
+        }
+    }
+}
+
+struct ParityDeepProfile: LanguageModelSession.DynamicProfile {
+    var body: some DynamicProfile {
+        Profile {
+            Instructions("You are a careful assistant. Answer tersely.")
+        }
+        .reasoningLevel(.deep)
+        .temperature(0.0)
     }
 }
 

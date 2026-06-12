@@ -100,6 +100,8 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
     public var schema: GenerationSchema?
     public var generationOptions: GenerationOptions
 
+    public var contextOptions: ContextOptions = ContextOptions()
+
     /// Callable tools, for executors that run the tool loop natively
     /// (e.g. the SystemLanguageModel bridge). Most executors emit
     /// `.toolCall` events instead and let the session execute.
@@ -136,6 +138,35 @@ public struct LanguageModelExecutorGenerationChannel: Sendable {
         /// re-execution.
         case recordedToolCall(id: String, toolName: String, argumentsJSON: String)
         case recordedToolOutput(id: String, toolName: String, text: String)
+        /// An incremental piece of the model's reasoning ("thinking") text.
+        case reasoningDelta(String)
+        /// Token accounting for the request, reported once known.
+        case usage(LanguageModelExecutorGenerationChannel.Usage)
+    }
+
+    public struct Usage: Sendable {
+        public struct Input: Sendable {
+            public var totalTokenCount: Int
+            public var cachedTokenCount: Int
+            public init(totalTokenCount: Int, cachedTokenCount: Int) {
+                self.totalTokenCount = totalTokenCount
+                self.cachedTokenCount = cachedTokenCount
+            }
+        }
+        public struct Output: Sendable {
+            public var totalTokenCount: Int
+            public var reasoningTokenCount: Int
+            public init(totalTokenCount: Int, reasoningTokenCount: Int) {
+                self.totalTokenCount = totalTokenCount
+                self.reasoningTokenCount = reasoningTokenCount
+            }
+        }
+        public var input: Input
+        public var output: Output
+        public init(input: Input, output: Output) {
+            self.input = input
+            self.output = output
+        }
     }
 
     let stream: AsyncStream<Event>

@@ -118,6 +118,14 @@ extension SystemLanguageModel.Executor {
             temperature: request.generationOptions.temperature,
             maximumResponseTokens: request.generationOptions.maximumResponseTokens
         )
+        var fmContextOptions = FoundationModels.ContextOptions()
+        switch request.contextOptions.reasoningLevel {
+        case .light: fmContextOptions.reasoningLevel = .light
+        case .moderate: fmContextOptions.reasoningLevel = .moderate
+        case .deep: fmContextOptions.reasoningLevel = .deep
+        case .custom(let value): fmContextOptions.reasoningLevel = .custom(value)
+        case nil: break
+        }
 
         if let schema = request.schema {
             let fmSchema = try convertSchema(schema)
@@ -127,9 +135,13 @@ extension SystemLanguageModel.Executor {
                 channel.send(.recordedToolOutput(id: call.id, toolName: call.toolName, text: call.output))
             }
             channel.send(.textDelta(response.content.jsonString))
+            channel.send(.usage(convertUsage(response.usage)))
         } else {
-            let stream = fmSession.streamResponse(to: promptText, options: fmOptions)
+            let stream = fmSession.streamResponse(
+                to: promptText, options: fmOptions, contextOptions: fmContextOptions
+            )
             var previous = ""
+            var lastUsage: FoundationModels.LanguageModelSession.Usage?
             for try await snapshot in stream {
                 let cumulative = snapshot.content
                 if cumulative.hasPrefix(previous) {
@@ -138,6 +150,10 @@ extension SystemLanguageModel.Executor {
                     channel.send(.textDelta(cumulative))
                 }
                 previous = cumulative
+                lastUsage = snapshot.usage
+            }
+            if let lastUsage {
+                channel.send(.usage(convertUsage(lastUsage)))
             }
             // Tool executions happened natively inside Apple's session; relay
             // them so the LinuxFoundation transcript records them faithfully.
@@ -148,6 +164,23 @@ extension SystemLanguageModel.Executor {
         }
     }
 
+}
+
+// MARK: Usage conversion
+
+private func convertUsage(
+    _ usage: FoundationModels.LanguageModelSession.Usage
+) -> LanguageModelExecutorGenerationChannel.Usage {
+    LanguageModelExecutorGenerationChannel.Usage(
+        input: .init(
+            totalTokenCount: usage.input.totalTokenCount,
+            cachedTokenCount: usage.input.cachedTokenCount
+        ),
+        output: .init(
+            totalTokenCount: usage.output.totalTokenCount,
+            reasoningTokenCount: usage.output.reasoningTokenCount
+        )
+    )
 }
 
 // MARK: Transcript conversion
