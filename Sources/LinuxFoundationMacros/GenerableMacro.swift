@@ -47,8 +47,11 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
+        if let enumDeclaration = declaration.as(EnumDeclSyntax.self) {
+            return try enumExpansion(of: node, enum: enumDeclaration)
+        }
         guard declaration.is(StructDeclSyntax.self) else {
-            throw MacroError(description: "@Generable currently supports structs only")
+            throw MacroError(description: "@Generable currently supports structs and enums")
         }
 
         let typeDescription = stringLiteralArgument(named: "description", in: node)
@@ -137,6 +140,75 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         )
 
         return members
+    }
+
+    // MARK: Enum expansion
+
+    /// Simple enums generate as constrained strings: each case is represented
+    /// by its String raw value when present, else its case name.
+    private static func enumExpansion(
+        of node: AttributeSyntax,
+        enum declaration: EnumDeclSyntax
+    ) throws -> [DeclSyntax] {
+        var caseNames: [String] = []
+        var caseValues: [String] = []
+        for member in declaration.memberBlock.members {
+            guard let enumCase = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
+            for element in enumCase.elements {
+                guard element.parameterClause == nil else {
+                    throw MacroError(description: "@Generable enums with associated values are not supported yet")
+                }
+                let name = element.name.text
+                caseNames.append(name)
+                if let raw = element.rawValue?.value.as(StringLiteralExprSyntax.self) {
+                    caseValues.append(raw.segments.compactMap {
+                        $0.as(StringSegmentSyntax.self)?.content.text
+                    }.joined())
+                } else {
+                    caseValues.append(name)
+                }
+            }
+        }
+        guard !caseNames.isEmpty else {
+            throw MacroError(description: "@Generable enums must declare at least one case")
+        }
+
+        let typeDescription = stringLiteralArgument(named: "description", in: node)
+        let descriptionArgument = typeDescription.map { "\"\($0)\"" } ?? "nil"
+        let decodeCases = zip(caseNames, caseValues)
+            .map { "        case \"\(String($1))\": self = .\(String($0))" }
+            .joined(separator: "\n")
+        let encodeCases = zip(caseNames, caseValues)
+            .map { "        case .\(String($0)): rawValue = \"\(String($1))\"" }
+            .joined(separator: "\n")
+        let choices = caseValues.map { "\"\(String($0))\"" }.joined(separator: ", ")
+
+        return [
+            """
+            public init(_ generatedContent: GeneratedContent) throws {
+                let rawValue = try generatedContent.value(String.self)
+                switch rawValue {
+            \(raw: decodeCases)
+                default:
+                    throw GeneratedContentError("'\\(rawValue)' is not a valid \(raw: declaration.name.text)")
+                }
+            }
+            """,
+            """
+            public var generatedContent: GeneratedContent {
+                let rawValue: String
+                switch self {
+            \(raw: encodeCases)
+                }
+                return rawValue.generatedContent
+            }
+            """,
+            """
+            public static var generationSchema: GenerationSchema {
+                GenerationSchema(type: Self.self, description: \(raw: descriptionArgument), anyOf: [\(raw: choices)])
+            }
+            """,
+        ]
     }
 
     // MARK: Extension expansion

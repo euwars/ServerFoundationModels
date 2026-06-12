@@ -252,6 +252,41 @@ struct BehaviorParityScenarios {
         )
         #expect(["red", "blue", "green", "yellow"].contains(response.content.color))
     }
+
+    @Test("@Generable enum properties decode to a valid case")
+    func generableEnumProperty() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Suggest a craft idea about folding a paper crane.",
+            generating: CraftIdea.self,
+            options: deterministic
+        )
+        #expect(!response.content.title.isEmpty)
+        #expect(response.content.category == .origami)
+    }
+
+    @Test("a dynamic profile session responds and re-resolves the profile across mode switches")
+    func dynamicProfileSession() async throws {
+        // Mirrors the Origami sample's orchestrator: one session, a profile
+        // that selects instructions/options per mode, switched mid-conversation.
+        let mode = ParityModeBox()
+        let session = LanguageModelSession(profile: ParityProfile(mode: mode))
+
+        let first = try await session.respond(
+            to: "What color is a ripe banana?",
+            options: deterministic
+        )
+        #expect(!first.content.isEmpty)
+
+        mode.value = "animals"
+        let second = try await session.respond(
+            to: "What animal says moo?",
+            options: deterministic
+        )
+        #expect(!second.content.isEmpty)
+        #expect(second.content.localizedCaseInsensitiveContains("cow"))
+        #expect(session.transcript.count >= 4)
+    }
 }
 
 // MARK: - API parity (no model required — pure library semantics)
@@ -311,6 +346,25 @@ struct APIParityScenarios {
             "Be helpful."
         }
         _ = instructions
+    }
+
+    @Test("@Generable enum values round-trip through their raw values")
+    func generableEnumRoundTrip() throws {
+        let restored = try CraftCategory(CraftCategory.origami.generatedContent)
+        #expect(restored == .origami)
+        #expect(throws: (any Error).self) {
+            _ = try CraftCategory(try GeneratedContent(json: "\"basket weaving\""))
+        }
+    }
+
+    @Test("ImageReference participates in @Generable schemas and round-trips")
+    func imageReferenceSchema() throws {
+        _ = ImageNote.generationSchema
+        let reference = try ImageReference(GeneratedContent(json: #"{"attachmentLabel": "photo-1"}"#))
+        let note = ImageNote(image: reference, note: "inspiration")
+        let restored = try ImageNote(try GeneratedContent(json: note.generatedContent.jsonString))
+        #expect(restored.image.attachmentLabel == "photo-1")
+        #expect(restored.note == "inspiration")
     }
 
     @Test("recursive @Generable schema construction terminates and values round-trip")
@@ -401,6 +455,67 @@ struct FileNode: Equatable {
 struct SkyReport: Equatable {
     @Guide(description: "The color of the sky", .anyOf(["red", "blue", "green", "yellow"]))
     var color: String
+}
+
+// MARK: - Shared dynamic-profile fixtures (Origami-shaped)
+
+final class ParityModeBox: @unchecked Sendable {
+    var value: String = "colors"
+}
+
+struct ParityInstructions: DynamicInstructions {
+    let mode: ParityModeBox
+
+    var body: some DynamicInstructions {
+        Instructions("You are a terse assistant. Answer with a single word when possible.")
+        if mode.value == "colors" {
+            Instructions("You answer questions about colors.")
+        } else {
+            Instructions("You answer questions about animals.")
+        }
+    }
+}
+
+struct ParityProfile: LanguageModelSession.DynamicProfile {
+    let mode: ParityModeBox
+
+    var body: some DynamicProfile {
+        if mode.value == "colors" {
+            Profile {
+                ParityInstructions(mode: mode)
+            }
+            .temperature(0.0)
+        } else {
+            Profile {
+                ParityInstructions(mode: mode)
+            }
+            .model(SystemLanguageModel())
+            .historyTransform { entries in
+                Array(entries.suffix(4))
+            }
+        }
+    }
+}
+
+@Generable(description: "A category of craft project")
+enum CraftCategory: String {
+    case origami = "origami project"
+    case knitting = "knitting project"
+    case pottery = "pottery project"
+}
+
+@Generable(description: "A craft project idea")
+struct CraftIdea: Equatable {
+    @Guide(description: "Short title for the idea")
+    var title: String
+    @Guide(description: "The category that best fits the idea")
+    var category: CraftCategory
+}
+
+@Generable(description: "A note about an attached image")
+struct ImageNote {
+    var image: ImageReference
+    var note: String
 }
 
 // MARK: - Shared test fixtures

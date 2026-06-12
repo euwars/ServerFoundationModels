@@ -19,6 +19,9 @@ public final class LanguageModelSession: @unchecked Sendable {
         LanguageModelExecutorGenerationChannel
     ) async throws -> Void
 
+    /// Set for profile-based sessions; re-evaluated before every request.
+    var profileResolver: (() -> ResolvedProfile)?
+
     public var transcript: Transcript {
         lock.lock()
         defer { lock.unlock() }
@@ -64,6 +67,16 @@ public final class LanguageModelSession: @unchecked Sendable {
         transcript: Transcript
     ) {
         self.init(erasing: model, tools: tools, instructionsText: nil, transcript: transcript)
+    }
+
+    /// A session whose model, instructions, and option overrides come from a
+    /// dynamic profile, re-evaluated before every request.
+    public convenience init(
+        profile: sending some DynamicProfile,
+        history: some Collection<Transcript.Entry> = []
+    ) {
+        self.init(erasing: SystemLanguageModel.default, tools: [], instructionsText: nil, transcript: Transcript(entries: Array(history)))
+        self.profileResolver = { resolveProfile(profile) }
     }
 
     private init<Model: LanguageModel>(
@@ -239,16 +252,45 @@ public final class LanguageModelSession: @unchecked Sendable {
         onCumulativeText: (@Sendable (String) -> Void)?
     ) async throws -> String {
         while true {
+            // Profile-based sessions re-resolve model/instructions/options
+            // before every request.
+            let resolved = profileResolver?()
+            var requestEntries = transcript.allEntries
+            if let transform = resolved?.historyTransform {
+                // The transform applies to history; the in-flight prompt (and
+                // any tool entries after it) always reach the model.
+                if let lastPrompt = requestEntries.lastIndex(where: {
+                    if case .prompt = $0 { return true }; return false
+                }) {
+                    requestEntries = transform(Array(requestEntries[..<lastPrompt])) + requestEntries[lastPrompt...]
+                } else {
+                    requestEntries = transform(requestEntries)
+                }
+            }
+            if let instructionsText = resolved?.instructionsText {
+                requestEntries.removeAll { if case .instructions = $0 { return true }; return false }
+                requestEntries.insert(.instructions(Transcript.Instructions(
+                    segments: [.text(.init(content: instructionsText))],
+                    toolDefinitions: toolDefinitions
+                )), at: 0)
+            }
+            var effectiveOptions = options
+            if effectiveOptions.temperature == nil { effectiveOptions.temperature = resolved?.temperature }
+            if effectiveOptions.samplingMode == nil { effectiveOptions.samplingMode = resolved?.samplingMode }
+            if effectiveOptions.maximumResponseTokens == nil {
+                effectiveOptions.maximumResponseTokens = resolved?.maximumResponseTokens
+            }
+
             let channel = LanguageModelExecutorGenerationChannel()
             var request = LanguageModelExecutorGenerationRequest(
-                transcript: transcript,
+                transcript: Transcript(entries: requestEntries),
                 enabledTools: toolDefinitions,
                 schema: schema,
-                generationOptions: options
+                generationOptions: effectiveOptions
             )
             request.executableTools = tools
 
-            let perform = self.perform
+            let perform = resolved?.perform ?? self.perform
             let executorTask = Task {
                 defer { channel.finish() }
                 try await perform(request, channel)

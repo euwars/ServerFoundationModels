@@ -68,10 +68,22 @@ spec; the design document lives in `docs/superpowers/specs/`.
 
 ## Status
 
-Early. Implemented and parity-tested so far: `LanguageModelSession`
-(respond/stream/tools/transcript), `GeneratedContent`, `GenerationSchema` +
-`DynamicGenerationSchema`, `Transcript`, `Prompt`/`Instructions` builders, the
-SDK 27 `LanguageModel`/`LanguageModelExecutor` contract, and
-`ChatCompletionsLanguageModel`. Next: the `@Generable`/`@Guide` macro package,
-typed `respond(generating:)`, full `GenerationOptions`/capabilities surface,
-attachments, `DynamicInstructions`, Linux CI.
+Implemented and parity-tested (46 scenario runs, both libraries, same
+on-device model): `LanguageModelSession` (respond / typed
+`respond(generating:)` / stream / tools / transcript / profiles),
+`@Generable`/`@Guide` macros for structs and String-raw enums with
+recursion-safe inline schemas (`$defs` only where genuinely recursive — no
+dangling `$ref`s), `GeneratedContent`, `GenerationSchema` +
+`DynamicGenerationSchema` + `GenerationGuide`, `Transcript`,
+`Prompt`/`Instructions` builders, `DynamicInstructions` DSL,
+`LanguageModelSession.DynamicProfile` + `Profile` + modifiers
+(`.model/.temperature/.historyTransform/...`), `SystemLanguageModel`
+(bridged to Apple's on-device model on Apple platforms),
+`ChatCompletionsLanguageModel`, `ImageReference`/`Attachment` types, and
+`PrivateCloudComputeLanguageModel` (source parity).
+
+Next: attachment delivery to executors (multimodal requests), session
+properties (`@SessionPropertyEntry`), full error taxonomy and
+`Response.usage`, executor caching per configuration, Linux CI
+(PARITY_BACKEND=chat-completions path), and an interface-diff gate against
+`reference/FoundationModels-macOS27.swiftinterface`.
