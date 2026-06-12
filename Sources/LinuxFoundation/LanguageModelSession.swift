@@ -166,7 +166,9 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             let result = try await generateLoop(schema: nil, options: options, onCumulativeText: nil)
 
-            appendEntry(.response(Transcript.Response(segments: [.text(.init(content: result.text))])))
+            let responseEntry = Transcript.Response(segments: [.text(.init(content: result.text))])
+            appendEntry(.response(responseEntry))
+            try await notifyResponse(responseEntry)
             return Response(
                 content: result.text,
                 rawContent: result.text.generatedContent,
@@ -334,6 +336,15 @@ public final class LanguageModelSession: @unchecked Sendable {
             if effectiveOptions.maximumResponseTokens == nil {
                 effectiveOptions.maximumResponseTokens = resolved?.maximumResponseTokens
             }
+            if effectiveOptions.toolCallingMode == nil {
+                effectiveOptions.toolCallingMode = resolved?.toolCallingMode
+            }
+            if let policy = resolved?.transcriptErrorHandlingPolicy {
+                errorPolicy = policy
+            }
+            if let resolved, case .prompt(let promptEntry)? = requestEntries.last {
+                for action in resolved.onPrompt { try await action(promptEntry) }
+            }
 
             let channel = LanguageModelExecutorGenerationChannel()
             var request = LanguageModelExecutorGenerationRequest(
@@ -450,6 +461,14 @@ public final class LanguageModelSession: @unchecked Sendable {
                 for output in recordedOutputs {
                     appendEntry(.toolOutput(output))
                 }
+                if let resolved {
+                    for call in recordedCalls {
+                        for action in resolved.onToolCall { try await action(call) }
+                    }
+                    for output in recordedOutputs {
+                        for action in resolved.onToolOutput { try await action(output) }
+                    }
+                }
             }
 
             if toolCalls.isEmpty {
@@ -479,13 +498,24 @@ public final class LanguageModelSession: @unchecked Sendable {
                 } catch {
                     throw ToolCallError(tool: tool.original, underlyingError: error)
                 }
-                appendEntry(.toolOutput(Transcript.ToolOutput(
+                let toolOutput = Transcript.ToolOutput(
                     id: call.id,
                     toolName: call.toolName,
                     segments: [.text(.init(content: output))]
-                )))
+                )
+                appendEntry(.toolOutput(toolOutput))
+                if let resolved {
+                    for action in resolved.onToolCall { try await action(call) }
+                    for action in resolved.onToolOutput { try await action(toolOutput) }
+                }
             }
         }
+    }
+
+    /// Invokes the resolved profile's onResponse callbacks for a new entry.
+    func notifyResponse(_ response: Transcript.Response) async throws {
+        guard let resolved = SessionPropertyValues.$current.withValue(properties, operation: { profileResolver?() }) else { return }
+        for action in resolved.onResponse { try await action(response) }
     }
 
     // MARK: Helpers
@@ -567,21 +597,43 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     public struct Usage: Sendable {
         public struct Input: Sendable {
-            public var totalTokenCount: Int = 0
-            public var cachedTokenCount: Int = 0
+            public var totalTokenCount: Int
+            public var cachedTokenCount: Int
+            public init(totalTokenCount: Int = 0, cachedTokenCount: Int = 0) {
+                self.totalTokenCount = totalTokenCount
+                self.cachedTokenCount = cachedTokenCount
+            }
         }
         public struct Output: Sendable {
-            public var totalTokenCount: Int = 0
-            public var reasoningTokenCount: Int = 0
+            public var totalTokenCount: Int
+            public var reasoningTokenCount: Int
+            public init(totalTokenCount: Int = 0, reasoningTokenCount: Int = 0) {
+                self.totalTokenCount = totalTokenCount
+                self.reasoningTokenCount = reasoningTokenCount
+            }
         }
-        public var input: Input = Input()
-        public var output: Output = Output()
+        public var input: Input
+        public var output: Output
+        public var metadata: [String: any Sendable]
+
+        /// Combined input and output token count.
+        public var totalTokenCount: Int {
+            input.totalTokenCount + output.totalTokenCount
+        }
+
+        public init(input: Input = Input(), output: Output = Output(), metadata: [String: any Sendable] = [:]) {
+            self.input = input
+            self.output = output
+            self.metadata = metadata
+        }
     }
 
     public struct ResponseStream<Content>: AsyncSequence where Content: Generable {
         public struct Snapshot {
             public var content: Content.PartiallyGenerated
             public var rawContent: GeneratedContent
+            public var transcriptEntries: ArraySlice<Transcript.Entry> = []
+            public var usage: Usage = Usage()
         }
 
         public typealias Element = Snapshot
@@ -598,6 +650,25 @@ public final class LanguageModelSession: @unchecked Sendable {
 
         public func makeAsyncIterator() -> AsyncIterator {
             AsyncIterator(iterator: stream.makeAsyncIterator())
+        }
+
+        /// Consumes the stream and returns the completed response.
+        public func collect() async throws -> Response<Content> {
+            var last: Snapshot?
+            for try await snapshot in self {
+                last = snapshot
+            }
+            guard let last else {
+                throw GenerationError.decodingFailure(.init(
+                    debugDescription: "the response stream finished without producing content"
+                ))
+            }
+            return Response(
+                content: try Content(last.rawContent),
+                rawContent: last.rawContent,
+                transcriptEntries: last.transcriptEntries,
+                usage: last.usage
+            )
         }
     }
 }

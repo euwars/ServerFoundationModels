@@ -101,7 +101,7 @@ extension LanguageModelSession {
     }
 
     /// Service-level failures surfaced by server-backed models.
-    public enum Error: LocalizedError, CustomDebugStringConvertible {
+    public enum Error: LocalizedError, CustomDebugStringConvertible, Hashable {
         case networkFailure(PrivateCloudComputeLanguageModel.Error.NetworkFailure)
         case quotaLimitReached(PrivateCloudComputeLanguageModel.Error.QuotaLimitReached)
         case serviceUnavailable(PrivateCloudComputeLanguageModel.Error.ServiceUnavailable)
@@ -115,6 +115,14 @@ extension LanguageModelSession {
         }
 
         public var errorDescription: String? { debugDescription }
+
+        public static func == (lhs: Error, rhs: Error) -> Bool {
+            lhs.debugDescription == rhs.debugDescription
+        }
+
+        public func hash(into hasher: inout Hasher) {
+            hasher.combine(debugDescription)
+        }
     }
 
     /// What happens to the transcript when a request fails.

@@ -26,6 +26,31 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         entries.append(entry)
     }
 
+    /// The conversation after any leading instructions.
+    public var history: ArraySlice<Entry> {
+        get {
+            let start = entries.firstIndex { entry in
+                if case .instructions = entry { return false }
+                return true
+            } ?? entries.endIndex
+            return entries[start...]
+        }
+        set {
+            let start = entries.firstIndex { entry in
+                if case .instructions = entry { return false }
+                return true
+            } ?? entries.endIndex
+            entries.replaceSubrange(start..., with: newValue)
+        }
+    }
+
+    public mutating func replaceSubrange(
+        _ subrange: Range<Int>,
+        with newElements: some Collection<Entry>
+    ) {
+        entries.replaceSubrange(subrange, with: newElements)
+    }
+
     var allEntries: [Entry] { entries }
 
     // MARK: Entries
@@ -52,11 +77,20 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
     // MARK: Segments
 
-    public enum Segment: Sendable, Equatable {
+    public enum Segment: Sendable, Equatable, Identifiable {
         case text(TextSegment)
         case structure(StructuredSegment)
         case attachment(AttachmentSegment)
         case custom(any CustomSegment)
+
+        public var id: String {
+            switch self {
+            case .text(let segment): return segment.id
+            case .structure(let segment): return segment.id
+            case .attachment(let segment): return segment.id
+            case .custom(let segment): return segment.id
+            }
+        }
 
         public static func == (lhs: Segment, rhs: Segment) -> Bool {
             switch (lhs, rhs) {
@@ -88,6 +122,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         #if canImport(CoreGraphics)
         public var cgImage: CGImage
         public var orientation: CGImagePropertyOrientation
+        var sourceURL: URL?
 
         public init(_ cgImage: CGImage, orientation: CGImagePropertyOrientation? = nil) {
             self.cgImage = cgImage
@@ -127,10 +162,26 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
     public struct StructuredSegment: Sendable, Equatable {
         public var id: String
+        public var source: String
         public var content: GeneratedContent
+
+        public var schemaName: String { source }
 
         public init(id: String = UUID().uuidString, content: GeneratedContent) {
             self.id = id
+            self.source = ""
+            self.content = content
+        }
+
+        public init(id: String = UUID().uuidString, source: String, content: GeneratedContent) {
+            self.id = id
+            self.source = source
+            self.content = content
+        }
+
+        public init(id: String = UUID().uuidString, schemaName: String, content: GeneratedContent) {
+            self.id = id
+            self.source = schemaName
             self.content = content
         }
     }
@@ -158,6 +209,8 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var segments: [Segment]
         public var options: GenerationOptions
         public var responseFormat: ResponseFormat?
+        public var contextOptions: ContextOptions
+        public var metadata: [String: any Codable & Sendable & Equatable]
 
         public init(
             id: String = UUID().uuidString,
@@ -169,6 +222,29 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
             self.segments = segments
             self.options = options
             self.responseFormat = responseFormat
+            self.contextOptions = ContextOptions()
+            self.metadata = [:]
+        }
+
+        public init(
+            id: String = UUID().uuidString,
+            metadata: [String: any Sendable & Codable & Equatable] = [:],
+            segments: [Segment],
+            options: GenerationOptions = GenerationOptions(),
+            responseFormat: ResponseFormat? = nil,
+            contextOptions: ContextOptions = ContextOptions()
+        ) {
+            self.id = id
+            self.metadata = metadata
+            self.segments = segments
+            self.options = options
+            self.responseFormat = responseFormat
+            self.contextOptions = contextOptions
+        }
+
+        public static func == (lhs: Prompt, rhs: Prompt) -> Bool {
+            lhs.id == rhs.id && lhs.segments == rhs.segments
+                && lhs.options == rhs.options && lhs.responseFormat == rhs.responseFormat
         }
     }
 
@@ -176,6 +252,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var id: String
         public var assetIDs: [String]
         public var segments: [Segment]
+        public var metadata: [String: any Codable & Sendable & Equatable]
 
         public init(
             id: String = UUID().uuidString,
@@ -185,6 +262,22 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
             self.id = id
             self.assetIDs = assetIDs
             self.segments = segments
+            self.metadata = [:]
+        }
+
+        public init(
+            id: String = UUID().uuidString,
+            metadata: [String: any Sendable & Codable & Equatable],
+            segments: [Segment]
+        ) {
+            self.id = id
+            self.assetIDs = []
+            self.segments = segments
+            self.metadata = metadata
+        }
+
+        public static func == (lhs: Response, rhs: Response) -> Bool {
+            lhs.id == rhs.id && lhs.assetIDs == rhs.assetIDs && lhs.segments == rhs.segments
         }
     }
 
@@ -214,11 +307,29 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var id: String
         public var toolName: String
         public var arguments: GeneratedContent
+        public var metadata: [String: any Codable & Sendable & Equatable]
 
         public init(id: String = UUID().uuidString, toolName: String, arguments: GeneratedContent) {
             self.id = id
             self.toolName = toolName
             self.arguments = arguments
+            self.metadata = [:]
+        }
+
+        public init(
+            id: String,
+            metadata: [String: any Codable & Sendable & Equatable],
+            toolName: String,
+            arguments: GeneratedContent
+        ) {
+            self.id = id
+            self.metadata = metadata
+            self.toolName = toolName
+            self.arguments = arguments
+        }
+
+        public static func == (lhs: ToolCall, rhs: ToolCall) -> Bool {
+            lhs.id == rhs.id && lhs.toolName == rhs.toolName && lhs.arguments == rhs.arguments
         }
     }
 
@@ -270,12 +381,20 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
     }
 
     public struct ResponseFormat: Sendable, Equatable {
-        var name: String
+        public var name: String
         var schemaNode: SchemaNode?
 
         public init(schema: GenerationSchema) {
-            self.name = "response"
+            if case .object(let typeName, _, _) = schema.root {
+                self.name = typeName
+            } else {
+                self.name = "response"
+            }
             self.schemaNode = schema.root
+        }
+
+        public init<Content>(type: Content.Type) where Content: Generable {
+            self.init(schema: Content.generationSchema)
         }
     }
 }
@@ -292,3 +411,249 @@ extension [Transcript.Segment] {
         }.joined(separator: "\n")
     }
 }
+
+
+// MARK: - Descriptions
+
+extension Transcript.Entry: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .instructions(let value): return value.description
+        case .prompt(let value): return value.description
+        case .toolCalls(let value): return value.description
+        case .toolOutput(let value): return value.description
+        case .response(let value): return value.description
+        case .reasoning(let value): return value.description
+        }
+    }
+}
+
+extension Transcript.Segment: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .text(let segment): return segment.description
+        case .structure(let segment): return segment.description
+        case .attachment(let segment): return segment.description
+        case .custom(let segment): return segment.description
+        }
+    }
+}
+
+extension Transcript.TextSegment: CustomStringConvertible {
+    public var description: String { content }
+}
+
+extension Transcript.StructuredSegment: CustomStringConvertible {
+    public var description: String { content.jsonString }
+}
+
+extension Transcript.AttachmentSegment: CustomStringConvertible {
+    public var description: String { label.map { "[attachment: \($0)]" } ?? "[attachment]" }
+}
+
+extension Transcript.Instructions: CustomStringConvertible {
+    public var description: String { segments.map(\.description).joined(separator: "\n") }
+}
+
+extension Transcript.Prompt: CustomStringConvertible {
+    public var description: String { segments.map(\.description).joined(separator: "\n") }
+}
+
+extension Transcript.Response: CustomStringConvertible {
+    public var description: String { segments.map(\.description).joined(separator: "\n") }
+}
+
+extension Transcript.Reasoning: CustomStringConvertible {
+    public var description: String { segments.map(\.description).joined(separator: "\n") }
+}
+
+extension Transcript.ToolCall: CustomStringConvertible {
+    public var description: String { "\(toolName)(\(arguments.jsonString))" }
+}
+
+extension Transcript.ToolCalls: CustomStringConvertible {
+    public var description: String { calls.map(\.description).joined(separator: "\n") }
+}
+
+extension Transcript.ResponseFormat: CustomStringConvertible {
+    public var description: String { name }
+}
+
+extension Transcript.ToolOutput: CustomStringConvertible {
+    public var description: String { "\(toolName) -> \(segments.map(\.description).joined(separator: "\n"))" }
+}
+
+// MARK: - CustomSegment defaults
+
+extension Transcript.CustomSegment {
+    public var description: String { String(describing: content) }
+
+    public var promptRepresentation: Prompt { Prompt(text: description) }
+    public var instructionsRepresentation: Instructions { Instructions(text: description) }
+
+    /// Type-erased equality, used when comparing segments.
+    public func isEqual(_ other: any Transcript.CustomSegment) -> Bool {
+        guard let other = other as? Self else { return false }
+        return self == other
+    }
+}
+
+// MARK: - Codable
+
+extension Transcript: Codable {
+    public func encode(to encoder: any Encoder) throws {
+        // Encodes the canonical JSON rendering of each entry.
+        var container = encoder.unkeyedContainer()
+        for entry in self {
+            try container.encode(EncodedEntry(entry))
+        }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var entries: [Entry] = []
+        while !container.isAtEnd {
+            entries.append(try container.decode(EncodedEntry.self).entry)
+        }
+        self.init(entries: entries)
+    }
+
+    struct EncodedEntry: Codable {
+        let entry: Entry
+
+        init(_ entry: Entry) { self.entry = entry }
+
+        enum CodingKeys: String, CodingKey {
+            case role, id, text, toolName, calls, arguments
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch entry {
+            case .instructions(let value):
+                try container.encode("instructions", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            case .prompt(let value):
+                try container.encode("prompt", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            case .response(let value):
+                try container.encode("response", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            case .reasoning(let value):
+                try container.encode("reasoning", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            case .toolCalls(let value):
+                try container.encode("toolCalls", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.calls.map { call in
+                    EncodedToolCall(id: call.id, toolName: call.toolName, arguments: call.arguments.jsonString)
+                }, forKey: .calls)
+            case .toolOutput(let value):
+                try container.encode("toolOutput", forKey: .role)
+                try container.encode(value.id, forKey: .id)
+                try container.encode(value.toolName, forKey: .toolName)
+                try container.encode(value.segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            }
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let role = try container.decode(String.self, forKey: .role)
+            let id = try container.decode(String.self, forKey: .id)
+            func segments() throws -> [Transcript.Segment] {
+                [.text(.init(content: try container.decodeIfPresent(String.self, forKey: .text) ?? ""))]
+            }
+            switch role {
+            case "instructions":
+                entry = .instructions(.init(id: id, segments: try segments(), toolDefinitions: []))
+            case "prompt":
+                entry = .prompt(.init(id: id, segments: try segments()))
+            case "response":
+                entry = .response(.init(id: id, segments: try segments()))
+            case "reasoning":
+                entry = .reasoning(.init(id: id, segments: try segments()))
+            case "toolCalls":
+                let calls = try container.decode([EncodedToolCall].self, forKey: .calls)
+                entry = .toolCalls(.init(id: id, calls: try calls.map {
+                    Transcript.ToolCall(
+                        id: $0.id,
+                        toolName: $0.toolName,
+                        arguments: try GeneratedContent(json: $0.arguments)
+                    )
+                }))
+            case "toolOutput":
+                entry = .toolOutput(.init(
+                    id: id,
+                    toolName: try container.decode(String.self, forKey: .toolName),
+                    segments: try segments()
+                ))
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .role, in: container, debugDescription: "unknown entry role '\(role)'"
+                )
+            }
+        }
+
+        struct EncodedToolCall: Codable {
+            var id: String
+            var toolName: String
+            var arguments: String
+        }
+    }
+}
+
+// MARK: - Image attachment conveniences
+
+#if canImport(CoreImage)
+import CoreImage
+import CoreVideo
+
+extension Transcript.ImageAttachment {
+    /// The image as a CIImage.
+    public var ciImage: CIImage {
+        CIImage(cgImage: cgImage)
+    }
+
+    /// The image as a pixel buffer, when convertible.
+    public var pixelBuffer: CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true]
+        CVPixelBufferCreate(
+            kCFAllocatorDefault, cgImage.width, cgImage.height,
+            kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer
+        )
+        guard let buffer else { return nil }
+        CIContext().render(ciImage, to: buffer)
+        return buffer
+    }
+
+    /// The source URL, when the image was loaded from one.
+    public var url: URL? { sourceURL }
+
+    public init(_ ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) throws {
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            throw GeneratedContentError("could not render CIImage")
+        }
+        self.init(cgImage, orientation: orientation)
+    }
+
+    public init(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation? = nil) throws {
+        try self.init(CIImage(cvPixelBuffer: pixelBuffer), orientation: orientation)
+    }
+
+    public init(imageURL: URL, orientation: CGImagePropertyOrientation? = nil) throws {
+        guard let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
+            throw GeneratedContentError("could not load image at \(imageURL)")
+        }
+        self.init(cgImage, orientation: orientation)
+        self.sourceURL = imageURL
+    }
+}
+#endif

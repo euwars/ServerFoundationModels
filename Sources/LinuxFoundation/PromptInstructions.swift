@@ -29,6 +29,14 @@ public struct PromptBuilder {
         Prompt(text: components.map { $0.promptRepresentation.text }.joined(separator: "\n"))
     }
 
+    public static func buildExpression(_ expression: some PromptRepresentable) -> Prompt {
+        expression.promptRepresentation
+    }
+
+    public static func buildLimitedAvailability(_ component: Prompt) -> Prompt {
+        component
+    }
+
     public static func buildOptional(_ component: Prompt?) -> Prompt {
         component ?? Prompt(text: "")
     }
@@ -65,6 +73,14 @@ extension Instructions: InstructionsRepresentable {
 public struct InstructionsBuilder {
     public static func buildBlock(_ components: any InstructionsRepresentable...) -> Instructions {
         Instructions(text: components.map { $0.instructionsRepresentation.text }.joined(separator: "\n"))
+    }
+
+    public static func buildExpression(_ expression: some InstructionsRepresentable) -> Instructions {
+        expression.instructionsRepresentation
+    }
+
+    public static func buildLimitedAvailability(_ component: Instructions) -> Instructions {
+        component
     }
 
     public static func buildOptional(_ component: Instructions?) -> Instructions {

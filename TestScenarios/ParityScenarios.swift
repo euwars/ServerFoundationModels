@@ -325,6 +325,48 @@ struct BehaviorParityScenarios {
         }
     }
 
+    @Test("ResponseStream.collect() returns the completed response")
+    func streamCollect() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.streamResponse(
+            to: "Reply with one short sentence: what is the capital of Japan?",
+            options: deterministic
+        ).collect()
+        #expect(response.content.localizedCaseInsensitiveContains("Tokyo"))
+    }
+
+    @Test("profile onPrompt/onResponse callbacks fire around each exchange")
+    func profileLifecycleCallbacks() async throws {
+        let recorder = CallRecorder()
+        let session = LanguageModelSession(profile: ParityCallbackProfile(recorder: recorder))
+        _ = try await session.respond(
+            to: "Reply with the single word: ready",
+            options: deterministic
+        )
+        #expect(recorder.calls.contains("prompt"))
+        #expect(recorder.calls.contains("response"))
+    }
+
+    @Test("transcripts encode, decode, and expose post-instruction history")
+    func transcriptCodableAndHistory() async throws {
+        let session = LanguageModelSession(
+            model: ParityModel.make(),
+            instructions: "You are a terse assistant."
+        )
+        _ = try await session.respond(to: "What color is a ripe banana?", options: deterministic)
+
+        let transcript = session.transcript
+        #expect(!transcript.history.isEmpty)
+        #expect(transcript.history.allSatisfy { entry in
+            if case .instructions = entry { return false }
+            return true
+        })
+
+        let data = try JSONEncoder().encode(transcript)
+        let decoded = try JSONDecoder().decode(Transcript.self, from: data)
+        #expect(decoded.count == transcript.count)
+    }
+
     @Test("SystemLanguageModel reports model facts: context size, languages, token counts")
     func systemModelFacts() async throws {
         let model = SystemLanguageModel.default
@@ -670,6 +712,19 @@ struct ParityInjectionProfile: LanguageModelSession.DynamicProfile {
             }
             return entries + [injected]
         }
+    }
+}
+
+struct ParityCallbackProfile: LanguageModelSession.DynamicProfile {
+    let recorder: CallRecorder
+
+    var body: some DynamicProfile {
+        Profile {
+            Instructions("You are a terse assistant.")
+        }
+        .temperature(0.0)
+        .onPrompt { _ in recorder.record("prompt") }
+        .onResponse { _ in recorder.record("response") }
     }
 }
 

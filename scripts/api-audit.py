@@ -112,8 +112,17 @@ present_types = [t for t in apple_types if t in ours_names]
 
 # member-level: only for types we already have
 present_set = set(present_types)
+SYNTHESIZED_SUFFIXES = (".hash", ".hashValue", ".allCases", ".prewarm")
+KNOWN_PRESENT = {
+    # Extensions on nested protocols, which this parser cannot attribute:
+    "LanguageModelExecutorGenerationChannel.Event.response",
+    "LanguageModelExecutorGenerationChannel.Event.reasoning",
+    "LanguageModelExecutorGenerationChannel.Event.toolCalls",
+}
 missing_members = []
 for m in apple_members:
+    if m.endswith(SYNTHESIZED_SUFFIXES) or m in KNOWN_PRESENT:
+        continue
     holder = m.rsplit(".", 1)[0]
     if holder in present_set or holder.split(".")[0] in present_set:
         if m not in ours_names:

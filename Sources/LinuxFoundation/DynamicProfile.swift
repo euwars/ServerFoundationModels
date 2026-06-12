@@ -95,6 +95,14 @@ struct PrimitiveProfileModifier: LanguageModelSession.DynamicProfileModifier {
         case reasoningLevel(ContextOptions.ReasoningLevel?)
         case historyTransform(([Transcript.Entry]) -> [Transcript.Entry])
         case inputFilter(([Transcript.Entry]) -> [Transcript.Entry])
+        case toolCallingMode(GenerationOptions.ToolCallingMode?)
+        case transcriptErrorHandlingPolicy(TranscriptErrorHandlingPolicy?)
+        case onPrompt((Transcript.Prompt) async throws -> Void)
+        case onResponse((Transcript.Response) async throws -> Void)
+        case onToolCall((Transcript.ToolCall) async throws -> Void)
+        case onToolOutput((Transcript.ToolOutput) async throws -> Void)
+        case onActivate(() async -> Void)
+        case onDeactivate(() async -> Void)
     }
     let kind: Kind
 
@@ -173,6 +181,97 @@ extension LanguageModelSession.DynamicProfile {
             content: self, modifier: PrimitiveProfileModifier(kind: .inputFilter(filter))
         )
     }
+
+    public func toolCalling(_ toolCallingMode: GenerationOptions.ToolCallingMode?) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .toolCallingMode(toolCallingMode))
+        )
+    }
+
+    public func toolCallingMode(_ toolCallingMode: GenerationOptions.ToolCallingMode?) -> some LanguageModelSession.DynamicProfile {
+        toolCalling(toolCallingMode)
+    }
+
+    public func transcriptErrorHandlingPolicy(
+        _ transcriptErrorHandlingPolicy: TranscriptErrorHandlingPolicy?
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self,
+            modifier: PrimitiveProfileModifier(kind: .transcriptErrorHandlingPolicy(transcriptErrorHandlingPolicy))
+        )
+    }
+
+    public func onPrompt(
+        perform action: @escaping (Transcript.Prompt) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onPrompt(action))
+        )
+    }
+
+    public func onPrompt(
+        perform action: @escaping () async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        onPrompt { _ in try await action() }
+    }
+
+    public func onResponse(
+        perform action: @escaping (Transcript.Response) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onResponse(action))
+        )
+    }
+
+    public func onResponse(
+        perform action: @escaping () async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        onResponse { _ in try await action() }
+    }
+
+    public func onToolCall(
+        perform action: @escaping (Transcript.ToolCall) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onToolCall(action))
+        )
+    }
+
+    public func onToolCall(
+        perform action: @escaping () async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        onToolCall { _ in try await action() }
+    }
+
+    public func onToolOutput(
+        perform action: @escaping (Transcript.ToolOutput) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onToolOutput(action))
+        )
+    }
+
+    public func onToolOutput(
+        perform action: @escaping () async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        onToolOutput { _ in try await action() }
+    }
+
+    public func onActivate(
+        perform action: @escaping () async -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onActivate(action))
+        )
+    }
+
+    public func onDeactivate(
+        perform action: @escaping () async -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onDeactivate(action))
+        )
+    }
 }
 
 // MARK: - Resolution
@@ -183,8 +282,16 @@ struct ResolvedProfile {
     var temperature: Double?
     var samplingMode: GenerationOptions.SamplingMode?
     var maximumResponseTokens: Int?
+    var toolCallingMode: GenerationOptions.ToolCallingMode?
     var reasoningLevel: ContextOptions.ReasoningLevel?
+    var transcriptErrorHandlingPolicy: TranscriptErrorHandlingPolicy?
     var historyTransform: (([Transcript.Entry]) -> [Transcript.Entry])?
+    var onPrompt: [(Transcript.Prompt) async throws -> Void] = []
+    var onResponse: [(Transcript.Response) async throws -> Void] = []
+    var onToolCall: [(Transcript.ToolCall) async throws -> Void] = []
+    var onToolOutput: [(Transcript.ToolOutput) async throws -> Void] = []
+    var onActivate: [() async -> Void] = []
+    var onDeactivate: [() async -> Void] = []
 }
 
 func resolveProfile(_ profile: some LanguageModelSession.DynamicProfile) -> ResolvedProfile {
@@ -240,6 +347,14 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
             case .historyTransform(let transform), .inputFilter(let transform):
                 let existing = resolved.historyTransform
                 resolved.historyTransform = existing.map { first in { transform(first($0)) } } ?? transform
+            case .toolCallingMode(let mode): resolved.toolCallingMode = mode
+            case .transcriptErrorHandlingPolicy(let policy): resolved.transcriptErrorHandlingPolicy = policy
+            case .onPrompt(let action): resolved.onPrompt.append(action)
+            case .onResponse(let action): resolved.onResponse.append(action)
+            case .onToolCall(let action): resolved.onToolCall.append(action)
+            case .onToolOutput(let action): resolved.onToolOutput.append(action)
+            case .onActivate(let action): resolved.onActivate.append(action)
+            case .onDeactivate(let action): resolved.onDeactivate.append(action)
             }
             return resolved
         }

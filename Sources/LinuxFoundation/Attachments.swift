@@ -22,6 +22,21 @@ public struct Attachment<Content: AttachmentContent> {
         self.label = label
         self.content = content
     }
+
+    /// Returns a copy carrying the given label.
+    public func label(_ label: String) -> Attachment<Content> {
+        Attachment(label: label, content: content)
+    }
+}
+
+extension Attachment: PromptRepresentable, InstructionsRepresentable {
+    public var promptRepresentation: Prompt {
+        Prompt(text: label.map { "[attachment: \($0)]" } ?? "[attachment]")
+    }
+
+    public var instructionsRepresentation: Instructions {
+        Instructions(text: label.map { "[attachment: \($0)]" } ?? "[attachment]")
+    }
 }
 
 public struct ImageAttachmentContent: AttachmentContent, Sendable, Equatable {
