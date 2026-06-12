@@ -3,6 +3,10 @@
 // entries (instructions, prompt, toolCalls, toolOutput, response, reasoning).
 
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+import ImageIO
+#endif
 
 public struct Transcript: Sendable, Equatable, RandomAccessCollection {
     public typealias Index = Int
@@ -51,6 +55,64 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
     public enum Segment: Sendable, Equatable {
         case text(TextSegment)
         case structure(StructuredSegment)
+        case attachment(AttachmentSegment)
+        case custom(any CustomSegment)
+
+        public static func == (lhs: Segment, rhs: Segment) -> Bool {
+            switch (lhs, rhs) {
+            case (.text(let a), .text(let b)): return a == b
+            case (.structure(let a), .structure(let b)): return a == b
+            case (.attachment(let a), .attachment(let b)): return a == b
+            case (.custom(let a), .custom(let b)):
+                return a.id == b.id && a.description == b.description
+            default: return false
+            }
+        }
+    }
+
+    /// Executor-defined transcript segments (e.g. server-tool activity) that
+    /// replay verbatim on later requests.
+    public protocol CustomSegment: InstructionsRepresentable, PromptRepresentable,
+        CustomStringConvertible, Equatable, Identifiable, Sendable
+    where ID == String {
+        associatedtype Content: Decodable, Encodable, Equatable, Sendable
+        var id: String { get }
+        var content: Content { get }
+    }
+
+    public enum Attachment: Sendable, Equatable {
+        case image(ImageAttachment)
+    }
+
+    public struct ImageAttachment: @unchecked Sendable, Equatable {
+        #if canImport(CoreGraphics)
+        public var cgImage: CGImage
+        public var orientation: CGImagePropertyOrientation
+
+        public init(_ cgImage: CGImage, orientation: CGImagePropertyOrientation? = nil) {
+            self.cgImage = cgImage
+            self.orientation = orientation ?? .up
+        }
+
+        public static func == (lhs: ImageAttachment, rhs: ImageAttachment) -> Bool {
+            lhs.cgImage === rhs.cgImage && lhs.orientation == rhs.orientation
+        }
+        #else
+        public var data: Data
+        public init(data: Data) { self.data = data }
+        #endif
+    }
+
+    public struct AttachmentSegment: Sendable, Identifiable, Equatable {
+        public var id: String
+        public var content: Attachment
+        public var label: String?
+
+        public init(id: String = UUID().uuidString, content: Attachment, label: String? = nil) {
+            self.id = id
+            self.content = content
+            self.label = label
+        }
     }
 
     public struct TextSegment: Sendable, Equatable {
@@ -126,14 +188,26 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         }
     }
 
-    public struct ToolCalls: Sendable, Equatable {
+    public struct ToolCalls: Sendable, Identifiable, Equatable, RandomAccessCollection {
+        public typealias Element = ToolCall
+        public typealias Index = Int
+
         public var id: String
         var calls: [ToolCall]
+
+        public init<S: Sequence>(id: String = UUID().uuidString, _ calls: S) where S.Element == ToolCall {
+            self.id = id
+            self.calls = Array(calls)
+        }
 
         init(id: String = UUID().uuidString, calls: [ToolCall]) {
             self.id = id
             self.calls = calls
         }
+
+        public var startIndex: Int { calls.startIndex }
+        public var endIndex: Int { calls.endIndex }
+        public subscript(position: Int) -> ToolCall { calls[position] }
     }
 
     public struct ToolCall: Sendable, Equatable {
@@ -160,13 +234,26 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         }
     }
 
-    public struct Reasoning: Sendable, Equatable {
+    public struct Reasoning: Sendable, Equatable, Identifiable {
         public var id: String
         public var segments: [Segment]
+        public var signature: Data?
+        public var metadata: [String: any Codable & Sendable & Equatable]
 
-        public init(id: String = UUID().uuidString, segments: [Segment]) {
+        public init(
+            id: String = UUID().uuidString,
+            metadata: [String: any Sendable & Codable & Equatable] = [:],
+            segments: [Segment],
+            signature: Data? = nil
+        ) {
             self.id = id
+            self.metadata = metadata
             self.segments = segments
+            self.signature = signature
+        }
+
+        public static func == (lhs: Reasoning, rhs: Reasoning) -> Bool {
+            lhs.id == rhs.id && lhs.segments == rhs.segments && lhs.signature == rhs.signature
         }
     }
 
@@ -199,6 +286,8 @@ extension [Transcript.Segment] {
             switch segment {
             case .text(let text): return text.content
             case .structure(let structure): return structure.content.jsonString
+            case .custom(let custom): return custom.description
+            case .attachment: return nil
             }
         }.joined(separator: "\n")
     }

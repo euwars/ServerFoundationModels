@@ -52,7 +52,7 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
     }
 
     public var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities()
+        LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration])
     }
 
     public var executorConfiguration: Executor.Configuration {
@@ -76,7 +76,7 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
             #if canImport(FoundationModels)
             try await bridgeRespond(to: request, streamingInto: channel)
             #else
-            throw LanguageModelError.requestFailed(
+            throw LanguageModelTransportError(
                 statusCode: 0,
                 message: "SystemLanguageModel is unavailable on this platform; use ChatCompletionsLanguageModel with a local model server"
             )
@@ -99,7 +99,7 @@ extension SystemLanguageModel.Executor {
         // before it is reconstructed as Apple-framework transcript history.
         var entries = Array(request.transcript)
         guard case .prompt(let promptEntry) = entries.popLast() else {
-            throw LanguageModelError.requestFailed(statusCode: 0, message: "request transcript must end with a prompt")
+            throw LanguageModelTransportError(statusCode: 0, message: "request transcript must end with a prompt")
         }
         let promptText = promptEntry.segments.joinedText
 
@@ -131,11 +131,16 @@ extension SystemLanguageModel.Executor {
             let fmSchema = try convertSchema(schema)
             let response = try await fmSession.respond(to: promptText, schema: fmSchema, options: fmOptions)
             for call in await recorder.calls {
-                channel.send(.recordedToolCall(id: call.id, toolName: call.toolName, argumentsJSON: call.argumentsJSON))
-                channel.send(.recordedToolOutput(id: call.id, toolName: call.toolName, text: call.output))
+                await channel.send(RecordedToolExecution(
+                    id: call.id, toolName: call.toolName,
+                    argumentsJSON: call.argumentsJSON, outputText: call.output
+                ))
             }
-            channel.send(.textDelta(response.content.jsonString))
-            channel.send(.usage(convertUsage(response.usage)))
+            await channel.send(.response(action: .appendText(response.content.jsonString, tokenCount: 0)))
+            await channel.send(.response(action: .updateUsage(
+                input: convertUsage(response.usage).input,
+                output: convertUsage(response.usage).output
+            )))
         } else {
             let stream = fmSession.streamResponse(
                 to: promptText, options: fmOptions, contextOptions: fmContextOptions
@@ -145,21 +150,24 @@ extension SystemLanguageModel.Executor {
             for try await snapshot in stream {
                 let cumulative = snapshot.content
                 if cumulative.hasPrefix(previous) {
-                    channel.send(.textDelta(String(cumulative.dropFirst(previous.count))))
+                    await channel.send(.response(action: .appendText(String(cumulative.dropFirst(previous.count)), tokenCount: 0)))
                 } else {
-                    channel.send(.textDelta(cumulative))
+                    await channel.send(.response(action: .replaceTextSegment(cumulative, tokenCount: 0)))
                 }
                 previous = cumulative
                 lastUsage = snapshot.usage
             }
             if let lastUsage {
-                channel.send(.usage(convertUsage(lastUsage)))
+                let converted = convertUsage(lastUsage)
+                await channel.send(.response(action: .updateUsage(input: converted.input, output: converted.output)))
             }
             // Tool executions happened natively inside Apple's session; relay
             // them so the LinuxFoundation transcript records them faithfully.
             for call in await recorder.calls {
-                channel.send(.recordedToolCall(id: call.id, toolName: call.toolName, argumentsJSON: call.argumentsJSON))
-                channel.send(.recordedToolOutput(id: call.id, toolName: call.toolName, text: call.output))
+                await channel.send(RecordedToolExecution(
+                    id: call.id, toolName: call.toolName,
+                    argumentsJSON: call.argumentsJSON, outputText: call.output
+                ))
             }
         }
     }
@@ -296,6 +304,8 @@ private func convertNode(_ node: SchemaNode) -> FoundationModels.DynamicGenerati
             )
     case .reference(let name):
         return FoundationModels.DynamicGenerationSchema(referenceTo: name)
+    case .raw:
+        return FoundationModels.DynamicGenerationSchema(name: "value", properties: [])
     }
 }
 

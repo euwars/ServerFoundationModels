@@ -35,7 +35,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     }
 
     public var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities()
+        if supportsGuidedGeneration {
+            return LanguageModelCapabilities(capabilities: [.vision, .toolCalling, .reasoning, .guidedGeneration])
+        }
+        return LanguageModelCapabilities(capabilities: [.vision, .toolCalling, .reasoning])
     }
 
     public var executorConfiguration: Executor.Configuration {
@@ -77,7 +80,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     body += line
                     if body.count > 4096 { break }
                 }
-                throw LanguageModelError.requestFailed(statusCode: http.statusCode, message: body)
+                if http.statusCode == 429 {
+                    throw LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: body))
+                }
+                throw LanguageModelTransportError(statusCode: http.statusCode, message: body)
             }
 
             // Accumulates streamed tool-call fragments by choice index.
@@ -91,11 +97,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
                 let delta = chunk["choices"]?[0]?["delta"]
                 if case .string(let content) = delta?["content"], !content.isEmpty {
-                    channel.send(.textDelta(content))
+                    await channel.send(.response(action: .appendText(content, tokenCount: 0)))
                 }
                 for reasoningKey in ["reasoning", "reasoning_content"] {
                     if case .string(let reasoning) = delta?[reasoningKey], !reasoning.isEmpty {
-                        channel.send(.reasoningDelta(reasoning))
+                        await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
                     }
                 }
                 if let usage = chunk["usage"], case .object = usage {
@@ -103,7 +109,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                         if case .integer(let value) = node { return value }
                         return 0
                     }
-                    channel.send(.usage(LanguageModelExecutorGenerationChannel.Usage(
+                    await channel.send(.response(action: .updateUsage(
                         input: .init(
                             totalTokenCount: intValue(usage["prompt_tokens"]),
                             cachedTokenCount: intValue(usage["prompt_tokens_details"]?["cached_tokens"])
@@ -135,11 +141,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
             for index in toolCalls.keys.sorted() {
                 let call = toolCalls[index]!
-                channel.send(.toolCall(
+                await channel.send(.toolCalls(action: .toolCall(
                     id: call.id.isEmpty ? UUID().uuidString : call.id,
-                    toolName: call.name,
-                    argumentsJSON: call.arguments
-                ))
+                    name: call.name,
+                    action: .appendArguments(call.arguments, tokenCount: 0)
+                )))
             }
         }
 

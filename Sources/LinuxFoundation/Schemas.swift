@@ -22,6 +22,8 @@ indirect enum SchemaNode: Sendable, Equatable {
     case object(name: String, description: String?, properties: [Property])
     case array(description: String?, item: SchemaNode, minimumElements: Int?, maximumElements: Int?)
     case reference(String)
+    /// An opaque JSON Schema document (from decoding a serialized schema).
+    case raw(JSONNode)
 
     /// All `$ref` names reachable from this node.
     func collectReferences(into references: inout Set<String>) {
@@ -34,7 +36,7 @@ indirect enum SchemaNode: Sendable, Equatable {
             }
         case .array(_, let item, _, _):
             item.collectReferences(into: &references)
-        case .string, .integer, .number, .boolean:
+        case .string, .integer, .number, .boolean, .raw:
             break
         }
     }
@@ -51,7 +53,7 @@ indirect enum SchemaNode: Sendable, Equatable {
             return nil
         case .array(_, let item, _, _):
             return item.findObject(named: target)
-        case .string, .integer, .number, .boolean, .reference:
+        case .string, .integer, .number, .boolean, .reference, .raw:
             return nil
         }
     }
@@ -117,6 +119,8 @@ indirect enum SchemaNode: Sendable, Equatable {
             }
         case .reference(let name):
             members.append(.init(key: "$ref", value: .string("#/$defs/\(name)")))
+        case .raw(let node):
+            return node
         }
         return .object(members)
     }
@@ -290,8 +294,16 @@ extension GenerationGuide where Value == [Never] {
 
 // MARK: - GenerationSchema
 
-public struct GenerationSchema: Sendable, Equatable, CustomDebugStringConvertible {
+public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringConvertible {
     let root: SchemaNode
+
+    public func encode(to encoder: any Encoder) throws {
+        try jsonSchemaDocument.encode(to: encoder)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        self.root = .raw(try JSONNode(from: decoder))
+    }
 
     init(node: SchemaNode) {
         self.root = node

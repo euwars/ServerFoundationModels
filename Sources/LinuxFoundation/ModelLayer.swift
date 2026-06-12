@@ -11,17 +11,41 @@ import Foundation
 
 public struct GenerationOptions: Sendable, Equatable {
     public struct SamplingMode: Sendable, Equatable {
-        enum Kind: Sendable, Equatable {
+        public enum Kind: Sendable, Equatable {
             case greedy
+            case top(k: Int, seed: UInt64?)
+            case nucleus(threshold: Double, seed: UInt64?)
         }
-        let kind: Kind
+        public let kind: Kind
 
         public static var greedy: SamplingMode { SamplingMode(kind: .greedy) }
+
+        public static func random(top k: Int, seed: UInt64? = nil) -> SamplingMode {
+            SamplingMode(kind: .top(k: k, seed: seed))
+        }
+
+        public static func random(probabilityThreshold: Double, seed: UInt64? = nil) -> SamplingMode {
+            SamplingMode(kind: .nucleus(threshold: probabilityThreshold, seed: seed))
+        }
+    }
+
+    public struct ToolCallingMode: Sendable, Equatable {
+        public enum Kind: Sendable, Equatable, Hashable {
+            case allowed
+            case required
+            case disallowed
+        }
+        public let kind: Kind
+
+        public static let allowed = ToolCallingMode(kind: .allowed)
+        public static let required = ToolCallingMode(kind: .required)
+        public static let disallowed = ToolCallingMode(kind: .disallowed)
     }
 
     public var samplingMode: SamplingMode?
     public var temperature: Double?
     public var maximumResponseTokens: Int?
+    public var toolCallingMode: ToolCallingMode?
 
     public init(
         samplingMode: SamplingMode? = nil,
@@ -31,6 +55,18 @@ public struct GenerationOptions: Sendable, Equatable {
         self.samplingMode = samplingMode
         self.temperature = temperature
         self.maximumResponseTokens = maximumResponseTokens
+    }
+
+    public init(
+        samplingMode: SamplingMode? = nil,
+        temperature: Double? = nil,
+        maximumResponseTokens: Int? = nil,
+        toolCallingMode: ToolCallingMode?
+    ) {
+        self.samplingMode = samplingMode
+        self.temperature = temperature
+        self.maximumResponseTokens = maximumResponseTokens
+        self.toolCallingMode = toolCallingMode
     }
 }
 
@@ -60,7 +96,24 @@ extension Tool where Arguments: Generable {
 // MARK: - Capabilities
 
 public struct LanguageModelCapabilities: Sendable {
-    public init() {}
+    let capabilities: Set<Capability>
+
+    public init(capabilities: [Capability]) {
+        self.capabilities = Set(capabilities)
+    }
+
+    public func contains(_ capability: Capability) -> Bool {
+        capabilities.contains(capability)
+    }
+
+    public struct Capability: Sendable, Hashable {
+        let raw: String
+
+        public static var vision: Capability { Capability(raw: "vision") }
+        public static var guidedGeneration: Capability { Capability(raw: "guidedGeneration") }
+        public static var reasoning: Capability { Capability(raw: "reasoning") }
+        public static var toolCalling: Capability { Capability(raw: "toolCalling") }
+    }
 }
 
 // MARK: - LanguageModel / Executor
@@ -101,6 +154,7 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
     public var generationOptions: GenerationOptions
 
     public var contextOptions: ContextOptions = ContextOptions()
+    public var metadata: [String: any Sendable & Codable & Equatable] = [:]
 
     /// Callable tools, for executors that run the tool loop natively
     /// (e.g. the SystemLanguageModel bridge). Most executors emit
@@ -120,86 +174,163 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
         self.schema = schema
         self.generationOptions = generationOptions
     }
-}
 
-// MARK: - Generation channel
-
-/// The stream executors write generation events into. The session consumes
-/// the channel while the executor produces.
-public struct LanguageModelExecutorGenerationChannel: Sendable {
-    enum Event: Sendable {
-        /// An incremental piece of response text.
-        case textDelta(String)
-        /// A complete tool invocation requested by the model; the session
-        /// executes the tool and re-requests with the output.
-        case toolCall(id: String, toolName: String, argumentsJSON: String)
-        /// A tool invocation the executor already ran natively (e.g. inside
-        /// Apple's on-device session); recorded in the transcript without
-        /// re-execution.
-        case recordedToolCall(id: String, toolName: String, argumentsJSON: String)
-        case recordedToolOutput(id: String, toolName: String, text: String)
-        /// An incremental piece of the model's reasoning ("thinking") text.
-        case reasoningDelta(String)
-        /// Token accounting for the request, reported once known.
-        case usage(LanguageModelExecutorGenerationChannel.Usage)
-    }
-
-    public struct Usage: Sendable {
-        public struct Input: Sendable {
-            public var totalTokenCount: Int
-            public var cachedTokenCount: Int
-            public init(totalTokenCount: Int, cachedTokenCount: Int) {
-                self.totalTokenCount = totalTokenCount
-                self.cachedTokenCount = cachedTokenCount
-            }
-        }
-        public struct Output: Sendable {
-            public var totalTokenCount: Int
-            public var reasoningTokenCount: Int
-            public init(totalTokenCount: Int, reasoningTokenCount: Int) {
-                self.totalTokenCount = totalTokenCount
-                self.reasoningTokenCount = reasoningTokenCount
-            }
-        }
-        public var input: Input
-        public var output: Output
-        public init(input: Input, output: Output) {
-            self.input = input
-            self.output = output
-        }
-    }
-
-    let stream: AsyncStream<Event>
-    private let continuation: AsyncStream<Event>.Continuation
-
-    public init() {
-        (stream, continuation) = AsyncStream.makeStream()
-    }
-
-    func send(_ event: Event) {
-        continuation.yield(event)
-    }
-
-    func finish() {
-        continuation.finish()
+    public init(
+        id: UUID,
+        transcript: Transcript,
+        enabledTools: [Transcript.ToolDefinition],
+        schema: GenerationSchema? = nil,
+        generationOptions: GenerationOptions,
+        contextOptions: ContextOptions,
+        metadata: [String: any Sendable & Codable & Equatable]
+    ) {
+        self.id = id
+        self.transcript = transcript
+        self.enabledToolDefinitions = enabledTools
+        self.schema = schema
+        self.generationOptions = generationOptions
+        self.contextOptions = contextOptions
+        self.metadata = metadata
     }
 }
 
 // MARK: - Errors
 
-public enum LanguageModelError: Error, CustomStringConvertible {
-    case executorCreationFailed(underlying: any Error)
-    case toolNotFound(String)
-    case requestFailed(statusCode: Int, message: String)
+public enum LanguageModelError: LocalizedError, CustomDebugStringConvertible {
+    case contextSizeExceeded(ContextSizeExceeded)
+    case rateLimited(RateLimited)
+    case guardrailViolation(GuardrailViolation)
+    case refusal(Refusal)
+    case unsupportedCapability(UnsupportedCapability)
+    case unsupportedTranscriptContent(UnsupportedTranscriptContent)
+    case unsupportedGenerationGuide(UnsupportedGenerationGuide)
+    case unsupportedLanguageOrLocale(UnsupportedLanguageOrLocale)
+    case timeout(Timeout)
+
+    public struct ContextSizeExceeded: Sendable {
+        public var contextSize: Int
+        public var tokenCount: Int
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(contextSize: Int, tokenCount: Int, debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.contextSize = contextSize
+            self.tokenCount = tokenCount
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct RateLimited: Sendable {
+        public var resetDate: Date?
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(resetDate: Date?, debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.resetDate = resetDate
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct GuardrailViolation: Sendable {
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct Refusal: Sendable {
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct UnsupportedCapability: Sendable {
+        public var capability: LanguageModelCapabilities.Capability
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(capability: LanguageModelCapabilities.Capability, debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.capability = capability
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct UnsupportedTranscriptContent: Sendable {
+        public var unsupportedContent: [Transcript.Entry]
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(unsupportedContent: [Transcript.Entry], debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.unsupportedContent = unsupportedContent
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct UnsupportedGenerationGuide: Sendable {
+        public var schemaName: String?
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(schemaName: String?, debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.schemaName = schemaName
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct UnsupportedLanguageOrLocale: Sendable {
+        public var languageCode: Locale.LanguageCode
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(languageCode: Locale.LanguageCode, debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.languageCode = languageCode
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public struct Timeout: Sendable {
+        public var debugDescription: String
+        public var metadata: [String: any Sendable]
+        public init(debugDescription: String, metadata: [String: any Sendable] = [:]) {
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+        }
+    }
+
+    public var debugDescription: String {
+        switch self {
+        case .contextSizeExceeded(let payload): return payload.debugDescription
+        case .rateLimited(let payload): return payload.debugDescription
+        case .guardrailViolation(let payload): return payload.debugDescription
+        case .refusal(let payload): return payload.debugDescription
+        case .unsupportedCapability(let payload): return payload.debugDescription
+        case .unsupportedTranscriptContent(let payload): return payload.debugDescription
+        case .unsupportedGenerationGuide(let payload): return payload.debugDescription
+        case .unsupportedLanguageOrLocale(let payload): return payload.debugDescription
+        case .timeout(let payload): return payload.debugDescription
+        }
+    }
+
+    public var errorDescription: String? { debugDescription }
+}
+
+/// LinuxFoundation-specific transport/configuration failures (not part of
+/// Apple's error taxonomy).
+public struct LanguageModelTransportError: Error, CustomStringConvertible {
+    public let statusCode: Int
+    public let message: String
+
+    public init(statusCode: Int, message: String) {
+        self.statusCode = statusCode
+        self.message = message
+    }
 
     public var description: String {
-        switch self {
-        case .executorCreationFailed(let underlying):
-            return "failed to create language model executor: \(underlying)"
-        case .toolNotFound(let name):
-            return "the model called tool '\(name)', which is not registered with the session"
-        case .requestFailed(let statusCode, let message):
-            return "language model request failed (HTTP \(statusCode)): \(message)"
-        }
+        "language model request failed (HTTP \(statusCode)): \(message)"
     }
 }

@@ -114,7 +114,7 @@ func erasePerform<Model: LanguageModel>(_ model: Model) -> ErasedPerform {
         do {
             executor = try Model.Executor(configuration: configuration)
         } catch {
-            throw LanguageModelError.executorCreationFailed(underlying: error)
+            throw LanguageModelTransportError(statusCode: 0, message: "failed to create executor: \(error)")
         }
         try await executor.respond(to: request, model: model, streamingInto: channel)
     }
@@ -262,9 +262,11 @@ public struct ContextOptions: Sendable, Equatable {
         case custom(String)
     }
 
+    public var includeSchemaInPrompt: Bool?
     public var reasoningLevel: ReasoningLevel?
 
-    public init(reasoningLevel: ReasoningLevel? = nil) {
+    public init(includeSchemaInPrompt: Bool? = nil, reasoningLevel: ReasoningLevel? = nil) {
+        self.includeSchemaInPrompt = includeSchemaInPrompt
         self.reasoningLevel = reasoningLevel
     }
 }

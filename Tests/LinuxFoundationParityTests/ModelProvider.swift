@@ -59,7 +59,7 @@ struct ChatCompletionsOrSystem: LanguageModel {
     var chat: ChatCompletionsLanguageModel
     var useChat: Bool
 
-    var capabilities: LanguageModelCapabilities { LanguageModelCapabilities() }
+    var capabilities: LanguageModelCapabilities { LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration]) }
 
     var executorConfiguration: Executor.Configuration {
         Executor.Configuration(

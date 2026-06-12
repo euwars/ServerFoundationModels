@@ -264,3 +264,53 @@ extension JSONNode {
         }
     }
 }
+
+
+// MARK: - Codable
+
+extension JSONNode: Codable {
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null: try container.encodeNil()
+        case .bool(let value): try container.encode(value)
+        case .integer(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .array(let elements): try container.encode(elements)
+        case .object(let members):
+            var keyed = encoder.container(keyedBy: RawKey.self)
+            for member in members {
+                try keyed.encode(member.value, forKey: RawKey(stringValue: member.key))
+            }
+        }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        if let keyed = try? decoder.container(keyedBy: RawKey.self) {
+            var members: [Member] = []
+            for key in keyed.allKeys.sorted(by: { $0.stringValue < $1.stringValue }) {
+                members.append(Member(key: key.stringValue, value: try keyed.decode(JSONNode.self, forKey: key)))
+            }
+            self = .object(members)
+            return
+        }
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { self = .null }
+        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? container.decode(Int.self) { self = .integer(value) }
+        else if let value = try? container.decode(Double.self) { self = .number(value) }
+        else if let value = try? container.decode(String.self) { self = .string(value) }
+        else if let value = try? container.decode([JSONNode].self) { self = .array(value) }
+        else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unsupported JSON value"))
+        }
+    }
+
+    struct RawKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+}

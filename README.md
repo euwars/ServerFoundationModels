@@ -82,8 +82,18 @@ dangling `$ref`s), `GeneratedContent`, `GenerationSchema` +
 `ChatCompletionsLanguageModel`, `ImageReference`/`Attachment` types, and
 `PrivateCloudComputeLanguageModel` (source parity).
 
+Proven against real third-party model packages: Anthropic's
+[ClaudeForFoundationModels](https://github.com/anthropics/ClaudeForFoundationModels)
+builds against LinuxFoundation with only the import swapped, and its entire
+unit test suite (78 tests — event translation, request building, error
+mapping, executor behavior) passes unmodified. The public executor surface
+this exercises: entry-addressed channel events (Response/Reasoning/ToolCalls
+with append/replace/update actions), `LanguageModelCapabilities` capability
+sets, Apple's full `LanguageModelError` taxonomy, `GenerationSchema`
+Codable, sampling/tool-calling modes, reasoning signatures and metadata,
+and session/response `usage`.
+
 Next: attachment delivery to executors (multimodal requests), session
-properties (`@SessionPropertyEntry`), full error taxonomy and
-`Response.usage`, executor caching per configuration, Linux CI
-(PARITY_BACKEND=chat-completions path), and an interface-diff gate against
-`reference/FoundationModels-macOS27.swiftinterface`.
+properties (`@SessionPropertyEntry`), executor caching per configuration,
+Linux CI (PARITY_BACKEND=chat-completions path), and an interface-diff gate
+against `reference/FoundationModels-macOS27.swiftinterface`.

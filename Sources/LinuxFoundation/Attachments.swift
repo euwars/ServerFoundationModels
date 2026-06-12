@@ -89,7 +89,7 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
     }
 
     public var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities()
+        LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration, .reasoning, .vision])
     }
 
     public var executorConfiguration: Executor.Configuration {
@@ -108,7 +108,7 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
             model: PrivateCloudComputeLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
-            throw LanguageModelError.requestFailed(
+            throw LanguageModelTransportError(
                 statusCode: 0,
                 message: "PrivateCloudComputeLanguageModel requires the Private Cloud Compute entitlement on an Apple platform"
             )

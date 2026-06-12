@@ -11,6 +11,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     private let lock = NSLock()
     private var _transcript: Transcript
     private var _isResponding = false
+    private var _usage = Usage()
 
     private let tools: [ErasedTool]
     private let toolDefinitions: [Transcript.ToolDefinition]
@@ -32,6 +33,13 @@ public final class LanguageModelSession: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _isResponding
+    }
+
+    /// Cumulative token usage across all requests on this session.
+    public var usage: Usage {
+        lock.lock()
+        defer { lock.unlock() }
+        return _usage
     }
 
     // MARK: Initializers
@@ -91,7 +99,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             do {
                 executor = try Model.Executor(configuration: configuration)
             } catch {
-                throw LanguageModelError.executorCreationFailed(underlying: error)
+                throw LanguageModelTransportError(statusCode: 0, message: "failed to create executor: \(error)")
             }
             try await executor.respond(to: request, model: model, streamingInto: channel)
         }
@@ -273,7 +281,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                 case .prompt, .toolOutput:
                     break
                 default:
-                    throw LanguageModelError.requestFailed(
+                    throw LanguageModelTransportError(
                         statusCode: 0,
                         message: "Transcript must end with a .prompt or .toolOutput entry."
                     )
@@ -312,36 +320,83 @@ public final class LanguageModelSession: @unchecked Sendable {
             var text = ""
             var reasoning = ""
             var usage = Usage()
-            var toolCalls: [(id: String, toolName: String, argumentsJSON: String)] = []
+            var toolCallOrder: [String] = []
+            var toolCallAccumulator: [String: (name: String, argumentsJSON: String)] = [:]
             var recordedCalls: [Transcript.ToolCall] = []
             var recordedOutputs: [Transcript.ToolOutput] = []
+
+            func accumulate(_ reported: LanguageModelExecutorGenerationChannel.Usage) {
+                usage.input.totalTokenCount += reported.input.totalTokenCount
+                usage.input.cachedTokenCount += reported.input.cachedTokenCount
+                usage.output.totalTokenCount += reported.output.totalTokenCount
+                usage.output.reasoningTokenCount += reported.output.reasoningTokenCount
+            }
+
             for await event in channel.stream {
                 switch event {
-                case .textDelta(let delta):
-                    text += delta
-                    onCumulativeText?(text)
-                case .reasoningDelta(let delta):
-                    reasoning += delta
-                case .usage(let reported):
-                    usage.input.totalTokenCount += reported.input.totalTokenCount
-                    usage.input.cachedTokenCount += reported.input.cachedTokenCount
-                    usage.output.totalTokenCount += reported.output.totalTokenCount
-                    usage.output.reasoningTokenCount += reported.output.reasoningTokenCount
-                case .toolCall(let id, let toolName, let argumentsJSON):
-                    toolCalls.append((id, toolName, argumentsJSON))
-                case .recordedToolCall(let id, let toolName, let argumentsJSON):
-                    let arguments = (try? GeneratedContent(json: argumentsJSON))
+                case let response as LanguageModelExecutorGenerationChannel.Response:
+                    switch response.action {
+                    case .appendText(let fragment):
+                        text += fragment.content
+                        onCumulativeText?(text)
+                    case .replaceTextSegment(let replacement):
+                        text = replacement.content
+                        onCumulativeText?(text)
+                    case .updateUsage(let reported):
+                        accumulate(reported)
+                    case .updateCustomSegment, .addAttachmentSegment, .removeAttachmentSegment, .updateMetadata:
+                        break
+                    }
+                case let reasoningEvent as LanguageModelExecutorGenerationChannel.Reasoning:
+                    switch reasoningEvent.action {
+                    case .appendText(let fragment):
+                        reasoning += fragment.content
+                    case .replaceTextSegment(let replacement):
+                        reasoning = replacement.content
+                    case .updateUsage(let reported):
+                        accumulate(reported)
+                    case .updateSignature, .updateMetadata:
+                        break
+                    }
+                case let toolEvent as LanguageModelExecutorGenerationChannel.ToolCalls:
+                    switch toolEvent.action {
+                    case .toolCall(let call):
+                        var accumulated = toolCallAccumulator[call.id] ?? (name: call.name, argumentsJSON: "")
+                        if toolCallAccumulator[call.id] == nil { toolCallOrder.append(call.id) }
+                        if !call.name.isEmpty { accumulated.name = call.name }
+                        if case .appendArguments(let fragment) = call.action {
+                            accumulated.argumentsJSON += fragment.content
+                        }
+                        toolCallAccumulator[call.id] = accumulated
+                    case .removeToolCall(let id):
+                        toolCallAccumulator.removeValue(forKey: id)
+                        toolCallOrder.removeAll { $0 == id }
+                    case .updateUsage(let reported):
+                        accumulate(reported)
+                    case .updateMetadata:
+                        break
+                    }
+                case let recorded as RecordedToolExecution:
+                    let arguments = (try? GeneratedContent(json: recorded.argumentsJSON))
                         ?? GeneratedContent(properties: [:])
-                    recordedCalls.append(Transcript.ToolCall(id: id, toolName: toolName, arguments: arguments))
-                case .recordedToolOutput(let id, let toolName, let outputText):
-                    recordedOutputs.append(Transcript.ToolOutput(
-                        id: id,
-                        toolName: toolName,
-                        segments: [.text(.init(content: outputText))]
+                    recordedCalls.append(Transcript.ToolCall(
+                        id: recorded.id, toolName: recorded.toolName, arguments: arguments
                     ))
+                    recordedOutputs.append(Transcript.ToolOutput(
+                        id: recorded.id,
+                        toolName: recorded.toolName,
+                        segments: [.text(.init(content: recorded.outputText))]
+                    ))
+                default:
+                    break
                 }
             }
+            let toolCalls = toolCallOrder.compactMap { id in
+                toolCallAccumulator[id].map { (id: id, toolName: $0.name, argumentsJSON: $0.argumentsJSON) }
+            }
             try await executorTask.value
+
+            recordUsage(usage)
 
             // The model's thinking is part of the durable record, ahead of
             // the response it led to.
@@ -377,7 +432,7 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             for call in transcriptCalls {
                 guard let tool = tools.first(where: { $0.name == call.toolName }) else {
-                    throw LanguageModelError.toolNotFound(call.toolName)
+                    throw LanguageModelTransportError(statusCode: 0, message: "the model called unregistered tool \(call.toolName)")
                 }
                 let output = try await tool.call(call.arguments)
                 appendEntry(.toolOutput(Transcript.ToolOutput(
@@ -394,6 +449,15 @@ public final class LanguageModelSession: @unchecked Sendable {
     private func appendEntry(_ entry: Transcript.Entry) {
         lock.lock()
         _transcript.append(entry)
+        lock.unlock()
+    }
+
+    private func recordUsage(_ usage: Usage) {
+        lock.lock()
+        _usage.input.totalTokenCount += usage.input.totalTokenCount
+        _usage.input.cachedTokenCount += usage.input.cachedTokenCount
+        _usage.output.totalTokenCount += usage.output.totalTokenCount
+        _usage.output.reasoningTokenCount += usage.output.reasoningTokenCount
         lock.unlock()
     }
 
