@@ -26,6 +26,14 @@ public protocol Generable: ConvertibleFromGeneratedContent, ConvertibleToGenerat
     static var generationSchema: GenerationSchema { get }
 }
 
+extension Generable {
+    /// The partially generated view of a complete value.
+    public func asPartiallyGenerated() -> Self.PartiallyGenerated {
+        // A complete value always converts to its own partial representation.
+        try! Self.PartiallyGenerated(generatedContent)
+    }
+}
+
 extension ConvertibleToGeneratedContent {
     public var promptRepresentation: Prompt {
         Prompt(text: generatedContent.jsonString)

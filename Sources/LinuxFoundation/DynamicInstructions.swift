@@ -63,11 +63,15 @@ public struct TupleDynamicInstructions<each Content: DynamicInstructions>: Dynam
 }
 
 public struct ConditionalDynamicInstructions<TrueContent: DynamicInstructions, FalseContent: DynamicInstructions>: DynamicInstructions, ResolvableDynamicInstructions {
-    enum Branch {
+    public enum Branch {
         case trueContent(TrueContent)
         case falseContent(FalseContent)
     }
     let branch: Branch
+
+    public init(_ branch: Branch) {
+        self.branch = branch
+    }
 
     public var body: Never { fatalError("leaf DynamicInstructions") }
     public typealias Body = Never
@@ -122,20 +126,20 @@ public struct DynamicInstructionsBuilder {
         _ content: Content?
     ) -> ConditionalDynamicInstructions<Content, EmptyDynamicInstructions> {
         if let content {
-            return ConditionalDynamicInstructions(branch: .trueContent(content))
+            return ConditionalDynamicInstructions(.trueContent(content))
         }
-        return ConditionalDynamicInstructions(branch: .falseContent(EmptyDynamicInstructions()))
+        return ConditionalDynamicInstructions(.falseContent(EmptyDynamicInstructions()))
     }
 
     public static func buildEither<TrueContent, FalseContent>(
         first content: TrueContent
     ) -> ConditionalDynamicInstructions<TrueContent, FalseContent> {
-        ConditionalDynamicInstructions(branch: .trueContent(content))
+        ConditionalDynamicInstructions(.trueContent(content))
     }
 
     public static func buildEither<TrueContent, FalseContent>(
         second content: FalseContent
     ) -> ConditionalDynamicInstructions<TrueContent, FalseContent> {
-        ConditionalDynamicInstructions(branch: .falseContent(content))
+        ConditionalDynamicInstructions(.falseContent(content))
     }
 }

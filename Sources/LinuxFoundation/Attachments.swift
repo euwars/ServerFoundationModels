@@ -36,14 +36,46 @@ public struct ImageAttachmentContent: AttachmentContent, Sendable, Equatable {
 
 /// A model-generated reference to an attached image, identified by label.
 public struct ImageReference: Sendable, Equatable, Generable {
-    public var attachmentLabel: String?
+    public let attachmentLabel: String
 
-    public init(attachmentLabel: String? = nil) {
+    init(attachmentLabel: String) {
         self.attachmentLabel = attachmentLabel
     }
 
     public init(_ content: GeneratedContent) throws {
-        self.attachmentLabel = try content.value(String?.self, forProperty: "attachmentLabel")
+        self.attachmentLabel = try content.value(String?.self, forProperty: "attachmentLabel") ?? ""
+    }
+
+    /// The attached image this reference points to, if present in the
+    /// transcript's attachment segments.
+    public func resolve(in transcript: Transcript) -> Transcript.ImageAttachment? {
+        for entry in transcript {
+            let segments: [Transcript.Segment]
+            switch entry {
+            case .prompt(let prompt): segments = prompt.segments
+            case .response(let response): segments = response.segments
+            case .instructions(let instructions): segments = instructions.segments
+            default: continue
+            }
+            for segment in segments {
+                if case .attachment(let attachment) = segment,
+                    attachment.label == attachmentLabel,
+                    case .image(let image) = attachment.content {
+                    return image
+                }
+            }
+        }
+        return nil
+    }
+
+    public struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+        public var id: GenerationID
+        public var attachmentLabel: String?
+
+        public init(_ content: GeneratedContent) throws {
+            self.id = content.id ?? GenerationID()
+            self.attachmentLabel = try content.value(String?.self, forProperty: "attachmentLabel")
+        }
     }
 
     public static var generationSchema: GenerationSchema {

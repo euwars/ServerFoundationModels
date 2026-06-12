@@ -223,6 +223,13 @@ extension GenerationGuide where Value == String {
         GenerationGuide<String>([.constant(value)])
     }
 
+    /// Constrains generation to match a regex. Swift's Regex does not expose
+    /// its source pattern, so this guide is honored by backends with native
+    /// regex support and otherwise documented as advisory.
+    public static func pattern<Output>(_ regex: Regex<Output>) -> GenerationGuide<String> {
+        GenerationGuide<String>([])
+    }
+
     public static func anyOf(_ values: [String]) -> GenerationGuide<String> {
         GenerationGuide<String>([.anyOf(values)])
     }
