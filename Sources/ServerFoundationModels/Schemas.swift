@@ -13,6 +13,11 @@ indirect enum SchemaNode: Sendable, Equatable {
         var description: String?
         var node: SchemaNode
         var isOptional: Bool
+        /// When true (set via `representNilExplicitlyInGeneratedContent`), an
+        /// optional property is rendered as nullable (`"type": [..., "null"]`
+        /// or anyOf-with-null) and listed in `required`, so the model must
+        /// emit an explicit JSON null rather than omit the key.
+        var requiresExplicitNil: Bool = false
     }
 
     case string(description: String?, enumChoices: [String]?, pattern: String?)
@@ -105,6 +110,9 @@ indirect enum SchemaNode: Sendable, Equatable {
             var propertyMembers: [JSONNode.Member] = []
             for property in properties {
                 var node = property.node.jsonSchema
+                if property.isOptional && property.requiresExplicitNil {
+                    node = SchemaNode.nullable(node)
+                }
                 if let propertyDescription = property.description, case .object(var inner) = node {
                     inner.removeAll { $0.key == "description" }
                     inner.insert(.init(key: "description", value: .string(propertyDescription)), at: 0)
@@ -113,7 +121,9 @@ indirect enum SchemaNode: Sendable, Equatable {
                 propertyMembers.append(.init(key: property.name, value: node))
             }
             members.append(.init(key: "properties", value: .object(propertyMembers)))
-            let required = properties.filter { !$0.isOptional }.map { JSONNode.string($0.name) }
+            let required = properties
+                .filter { !$0.isOptional || $0.requiresExplicitNil }
+                .map { JSONNode.string($0.name) }
             members.append(.init(key: "required", value: .array(required)))
             members.append(.init(key: "additionalProperties", value: .bool(false)))
         case .array(let description, let item, let minimumElements, let maximumElements):
@@ -135,6 +145,32 @@ indirect enum SchemaNode: Sendable, Equatable {
             return node
         }
         return .object(members)
+    }
+
+    /// Renders a property schema as explicitly nullable. Simple typed schemas
+    /// become `"type": [<type>, "null"]` (with `null` added to any `enum`);
+    /// composite schemas (objects, arrays, unions, references) are wrapped in
+    /// `anyOf: [<schema>, {"type": "null"}]`.
+    static func nullable(_ schema: JSONNode) -> JSONNode {
+        if case .object(var members) = schema,
+            let typeIndex = members.firstIndex(where: { $0.key == "type" }),
+            case .string(let typeName) = members[typeIndex].value,
+            typeName != "object", typeName != "array",
+            !members.contains(where: { $0.key == "$ref" || $0.key == "anyOf" }) {
+            members[typeIndex].value = .array([.string(typeName), .string("null")])
+            if let enumIndex = members.firstIndex(where: { $0.key == "enum" }),
+                case .array(var choices) = members[enumIndex].value {
+                choices.append(.null)
+                members[enumIndex].value = .array(choices)
+            }
+            return .object(members)
+        }
+        return .object([
+            .init(key: "anyOf", value: .array([
+                schema,
+                .object([.init(key: "type", value: .string("null"))]),
+            ]))
+        ])
     }
 }
 
@@ -185,6 +221,7 @@ enum GenerationGuideConstraint: Sendable {
     case maximumNumber(Double)
     case anyOf([String])
     case constant(String)
+    case pattern(String)
     case minimumCount(Int)
     case maximumCount(Int)
     case element([GenerationGuideConstraint])
@@ -215,6 +252,8 @@ public struct GenerationGuide<Value>: Sendable {
                 node = .string(description: description, enumChoices: choices, pattern: pattern)
             case (.constant(let value), .string(let description, _, let pattern)):
                 node = .string(description: description, enumChoices: [value], pattern: pattern)
+            case (.pattern(let value), .string(let description, let enumChoices, _)):
+                node = .string(description: description, enumChoices: enumChoices, pattern: value)
             case (.minimumCount(let count), .array(let description, let item, _, let maximum)):
                 node = .array(description: description, item: item, minimumElements: count, maximumElements: maximum)
             case (.maximumCount(let count), .array(let description, let item, let minimum, _)):
@@ -235,11 +274,21 @@ extension GenerationGuide where Value == String {
         GenerationGuide<String>([.constant(value)])
     }
 
-    /// Constrains generation to match a regex. Swift's Regex does not expose
-    /// its source pattern, so this guide is honored by backends with native
-    /// regex support and otherwise documented as advisory.
+    /// LIMITATION: Swift's `Regex` does not expose its source pattern at
+    /// runtime, so this guide CANNOT be rendered into the JSON schema and has
+    /// no effect here. Use a regex *literal* with the `@Guide` macro (the
+    /// macro reads the literal's text and emits a real pattern constraint),
+    /// or call `pattern(_ pattern: String)` with the pattern string directly.
     public static func pattern<Output>(_ regex: Regex<Output>) -> GenerationGuide<String> {
         GenerationGuide<String>([])
+    }
+
+    /// Constrains generation to match the given regular expression pattern,
+    /// rendered as the JSON Schema `pattern` keyword. Unlike the `Regex`
+    /// overload, the pattern string is available at runtime and is honored
+    /// in the serialized schema.
+    public static func pattern(_ pattern: String) -> GenerationGuide<String> {
+        GenerationGuide<String>([.pattern(pattern)])
     }
 
     public static func anyOf(_ values: [String]) -> GenerationGuide<String> {
@@ -358,46 +407,66 @@ extension GenerationGuide where Value == [Never] {
 public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringConvertible {
     let root: SchemaNode
 
+    /// Dependency schemas supplied via `init(root:dependencies:)`. Referenced
+    /// definitions are hoisted from here (in addition to `root`) into `$defs`
+    /// when the document is rendered.
+    let dependencies: [SchemaNode]
+
     public func encode(to encoder: any Encoder) throws {
         try jsonSchemaDocument.encode(to: encoder)
     }
 
     public init(from decoder: any Decoder) throws {
         self.root = .raw(try JSONNode(from: decoder))
+        self.dependencies = []
     }
 
     init(node: SchemaNode) {
         self.root = node
+        self.dependencies = []
     }
 
     public init(root: DynamicGenerationSchema, dependencies: [DynamicGenerationSchema]) throws {
         // Validate that every reference resolves within root + dependencies,
-        // and that named types are not defined twice.
-        var definedNames: [String] = []
+        // and that named types are not defined twice with conflicting shapes.
+        var definitions: [String: [SchemaNode]] = [:]
         func collectNames(_ node: SchemaNode) {
-            if case .object(let name, _, let properties) = node {
-                definedNames.append(name)
+            switch node {
+            case .object(let name, _, let properties):
+                definitions[name, default: []].append(node)
                 for property in properties { collectNames(property.node) }
-            } else if case .array(_, let item, _, _) = node {
+            case .array(_, let item, _, _):
                 collectNames(item)
+            case .anyOf(let name, _, let choices):
+                definitions[name, default: []].append(node)
+                for choice in choices { collectNames(choice) }
+            case .string, .integer, .number, .boolean, .reference, .raw:
+                break
             }
         }
         collectNames(root.node)
         for dependency in dependencies { collectNames(dependency.node) }
 
-        let duplicates = Dictionary(grouping: definedNames, by: { $0 }).filter { $1.count > 1 }
-        if let duplicate = duplicates.keys.sorted().first {
-            throw SchemaError.duplicateType(
-                schema: nil,
-                type: duplicate,
-                context: .init(debugDescription: "Duplicate type \(duplicate) in schema")
-            )
+        // The same Generable type embedded inline more than once produces
+        // identical repeated definitions — that's fine. Only differing
+        // definitions sharing one name are an error.
+        for name in definitions.keys.sorted() {
+            let nodes = definitions[name] ?? []
+            guard nodes.count > 1 else { continue }
+            let distinctForms = Set(nodes.map { $0.jsonSchema.serialized })
+            if distinctForms.count > 1 {
+                throw SchemaError.duplicateType(
+                    schema: nil,
+                    type: name,
+                    context: .init(debugDescription: "Duplicate type \(name) in schema")
+                )
+            }
         }
 
         var references: Set<String> = []
         root.node.collectReferences(into: &references)
         for dependency in dependencies { dependency.node.collectReferences(into: &references) }
-        let unresolved = references.subtracting(definedNames).sorted()
+        let unresolved = references.subtracting(definitions.keys).sorted()
         if !unresolved.isEmpty {
             throw SchemaError.undefinedReferences(
                 schema: nil,
@@ -407,10 +476,12 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
         }
 
         self.root = root.node
+        self.dependencies = dependencies.map(\.node)
     }
 
     public init(type: any Generable.Type, description: String? = nil, anyOf choices: [String]) {
         self.root = .string(description: description, enumChoices: choices, pattern: nil)
+        self.dependencies = []
     }
 
     public init(type: any Generable.Type, description: String? = nil, anyOf types: [any Generable.Type]) {
@@ -419,15 +490,33 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
             description: description,
             choices: types.map { $0.generationSchema.root }
         )
+        self.dependencies = []
     }
 
+    /// When `explicitNil` is true, optional properties are rendered as
+    /// nullable (`"type": [<type>, "null"]`, or anyOf-with-null for composite
+    /// types) and listed in `required`, so the model represents nil as an
+    /// explicit JSON null instead of omitting the key.
     public init(
         type: any Generable.Type,
         description: String? = nil,
         representNilExplicitlyInGeneratedContent explicitNil: Bool,
         properties: [Property]
     ) {
-        self.init(type: type, description: description, properties: properties)
+        self.root = .object(
+            name: String(describing: type),
+            description: description,
+            properties: properties.map {
+                .init(
+                    name: $0.name,
+                    description: $0.description,
+                    node: $0.node,
+                    isOptional: $0.isOptional,
+                    requiresExplicitNil: explicitNil && $0.isOptional
+                )
+            }
+        )
+        self.dependencies = []
     }
 
     public init(type: any Generable.Type, description: String? = nil, properties: [Property]) {
@@ -438,29 +527,58 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
                 .init(name: $0.name, description: $0.description, node: $0.node, isOptional: $0.isOptional)
             }
         )
+        self.dependencies = []
     }
 
     public var debugDescription: String { jsonSchemaDocument.serialized }
 
-    /// Full JSON Schema document. When the schema is recursive, referenced
-    /// type definitions are hoisted into `$defs` so every `$ref` resolves.
+    /// Full JSON Schema document. When the schema is recursive or refers to
+    /// dependency schemas, referenced type definitions are hoisted into
+    /// `$defs` (from the root and from dependencies, transitively) so every
+    /// `$ref` resolves.
     var jsonSchemaDocument: JSONNode {
         var references: Set<String> = []
         root.collectReferences(into: &references)
         guard !references.isEmpty else { return root.jsonSchema }
 
-        var definitions: [JSONNode.Member] = []
-        for name in references.sorted() {
-            if let definition = root.findObject(named: name) {
-                definitions.append(.init(key: name, value: definition.jsonSchema))
+        func findDefinition(named name: String) -> SchemaNode? {
+            if let found = root.findObject(named: name) { return found }
+            for dependency in dependencies {
+                if let found = dependency.findObject(named: name) { return found }
             }
+            return nil
         }
 
-        // Self-recursive root: the root object is itself a definition.
-        if case .object(let name, _, _) = root, references.contains(name) {
+        // Resolve transitively: a hoisted definition may itself reference
+        // further definitions (e.g. one dependency referencing another).
+        var resolved: [String: SchemaNode] = [:]
+        var pending = Array(references)
+        while let name = pending.popLast() {
+            guard resolved[name] == nil, let definition = findDefinition(named: name) else { continue }
+            resolved[name] = definition
+            var nested: Set<String> = []
+            definition.collectReferences(into: &nested)
+            pending.append(contentsOf: nested.filter { resolved[$0] == nil })
+        }
+
+        let definitions: [JSONNode.Member] = resolved.keys.sorted().compactMap { name in
+            resolved[name].map { .init(key: name, value: $0.jsonSchema) }
+        }
+
+        // Self-referenced root (directly recursive, or referenced back from a
+        // dependency): the root is itself a definition; the document is a
+        // single $ref into $defs.
+        let rootName: String?
+        switch root {
+        case .object(let name, _, _), .anyOf(let name, _, _):
+            rootName = name
+        default:
+            rootName = nil
+        }
+        if let rootName, resolved[rootName] != nil {
             return .object([
                 .init(key: "$defs", value: .object(definitions)),
-                .init(key: "$ref", value: .string("#/$defs/\(name)")),
+                .init(key: "$ref", value: .string("#/$defs/\(rootName)")),
             ])
         }
 
@@ -499,8 +617,12 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
             self.isOptional = true
         }
 
-        /// Regex guides are advisory: Swift's Regex does not expose its
-        /// source pattern for schema rendering.
+        /// LIMITATION: Swift's `Regex` does not expose its source pattern at
+        /// runtime, so `Regex` guides passed here CANNOT be rendered into the
+        /// JSON schema — no `pattern` keyword is emitted. To get a real
+        /// pattern constraint, use `GenerationGuide.pattern(_ pattern: String)`
+        /// with the typed initializer, or a regex *literal* with the `@Guide`
+        /// macro (the macro reads the literal's text at compile time).
         public init<RegexOutput>(
             name: String,
             description: String? = nil,
@@ -513,6 +635,8 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
             self.isOptional = false
         }
 
+        /// LIMITATION: `Regex` guides cannot be rendered into the JSON schema
+        /// (no source pattern at runtime); see the non-optional overload.
         public init<RegexOutput>(
             name: String,
             description: String? = nil,
@@ -550,13 +674,29 @@ public struct DynamicGenerationSchema: Sendable {
         self.node = .anyOf(name: name, description: description, choices: choices.map(\.node))
     }
 
+    /// When `explicitNil` is true, optional properties are rendered as
+    /// nullable (`"type": [<type>, "null"]`, or anyOf-with-null for composite
+    /// types) and listed in `required`, so the model represents nil as an
+    /// explicit JSON null instead of omitting the key.
     public init(
         name: String,
         description: String? = nil,
         representNilExplicitlyInGeneratedContent explicitNil: Bool,
         properties: [Property]
     ) {
-        self.init(name: name, description: description, properties: properties)
+        self.node = .object(
+            name: name,
+            description: description,
+            properties: properties.map {
+                .init(
+                    name: $0.name,
+                    description: $0.description,
+                    node: $0.schema.node,
+                    isOptional: $0.isOptional,
+                    requiresExplicitNil: explicitNil && $0.isOptional
+                )
+            }
+        )
     }
 
     public init<Value>(type: Value.Type, guides: [GenerationGuide<Value>] = []) where Value: Generable {

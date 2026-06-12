@@ -14,7 +14,7 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
 
     private static func parts(
         of declaration: some DeclSyntaxProtocol
-    ) throws -> (name: String, type: String, defaultValue: String) {
+    ) throws -> (name: String, type: String, defaultValue: String, access: String) {
         guard let variable = declaration.as(VariableDeclSyntax.self),
             let binding = variable.bindings.first,
             let pattern = binding.pattern.as(IdentifierPatternSyntax.self),
@@ -25,7 +25,14 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
                 description: "@SessionPropertyEntry requires 'var name: Type = defaultValue'"
             )
         }
-        return (pattern.identifier.text, type, initializer)
+        // Mirror the property's access level: a `public` key struct on an
+        // internal property (or internal containing type) would not compile.
+        return (
+            pattern.identifier.text,
+            type,
+            initializer,
+            GenerableMacro.accessModifier(in: variable.modifiers)
+        )
     }
 
     public static func expansion(
@@ -33,7 +40,7 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         providingAccessorsOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [AccessorDeclSyntax] {
-        let (name, _, _) = try parts(of: declaration)
+        let (name, _, _, _) = try parts(of: declaration)
         return [
             "get { self[__Key_\(raw: name).self] }",
             "set { self[__Key_\(raw: name).self] = newValue }",
@@ -45,11 +52,11 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let (name, type, defaultValue) = try parts(of: declaration)
+        let (name, type, defaultValue, access) = try parts(of: declaration)
         return [
             """
-            public struct __Key_\(raw: name): SessionPropertyKey {
-                public static var defaultValue: \(raw: type) { \(raw: defaultValue) }
+            \(raw: access)struct __Key_\(raw: name): SessionPropertyKey {
+                \(raw: access)static var defaultValue: \(raw: type) { \(raw: defaultValue) }
             }
             """
         ]

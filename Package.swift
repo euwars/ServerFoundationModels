@@ -50,6 +50,15 @@ let package = Package(
         .testTarget(
             name: "AppleFoundationModelsParityTests"
         ),
+        // Macro expansion tests (assertMacroExpansion) for the @Generable /
+        // @Guide / @SessionPropertyEntry implementations.
+        .testTarget(
+            name: "ServerFoundationModelsMacroTests",
+            dependencies: [
+                "ServerFoundationModelsMacros",
+                .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+            ]
+        ),
         // Subject: the same scenarios compiled against this package, running
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
         .testTarget(
