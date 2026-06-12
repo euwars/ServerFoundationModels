@@ -200,6 +200,8 @@ extension Array: ConvertibleToGeneratedContent where Element: ConvertibleToGener
 }
 
 extension Array: Generable where Element: Generable {
+    public typealias PartiallyGenerated = [Element.PartiallyGenerated]
+
     public static var generationSchema: GenerationSchema {
         GenerationSchema(node: .array(
             description: nil,

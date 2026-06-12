@@ -253,6 +253,94 @@ struct BehaviorParityScenarios {
         #expect(["red", "blue", "green", "yellow"].contains(response.content.color))
     }
 
+    @Test("unbounded arrays generate sensible counts without fabricated padding")
+    func unboundedArrayGeneration() async throws {
+        // AnyLanguageModel #160: unguided array schemas forced a fixed item
+        // count, fabricating entries until the token budget blew up.
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "List exactly three short activities for a rainy day.",
+            generating: ActivityList.self,
+            options: deterministic
+        )
+        #expect(!response.content.items.isEmpty)
+        #expect(response.content.items.count <= 10)
+        #expect(response.content.items.allSatisfy { !$0.name.isEmpty })
+    }
+
+    @Test("@Generable enum properties decode correctly without any @Guide annotations")
+    func unguidedEnumProperty() async throws {
+        // AnyLanguageModel #146: an enum stored property without @Guide
+        // silently produced placeholder values for every member.
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "Suggest a craft idea about shaping a clay bowl.",
+            generating: PlainCraftIdea.self,
+            options: deterministic
+        )
+        #expect(!response.content.title.isEmpty)
+        #expect([CraftCategory.origami, .knitting, .pottery].contains(response.content.category))
+    }
+
+    @Test("single-property wrapper types decode real values, not placeholders")
+    func wrapperTypeDecoding() async throws {
+        // AnyLanguageModel #94: nested Generable wrapper types came back as
+        // placeholder values from the system model backend.
+        let session = LanguageModelSession(model: ParityModel.make())
+        let response = try await session.respond(
+            to: "List two short activities for a sunny day.",
+            generating: ActivityList.self,
+            options: deterministic
+        )
+        let names = response.content.items.map(\.name)
+        #expect(!names.isEmpty)
+        #expect(Set(names).count == names.count, "items should be distinct, not repeated placeholders")
+        #expect(names.allSatisfy { $0.localizedCaseInsensitiveContains("placeholder") == false })
+    }
+
+    @Test("the transcript is observable while a stream is still being consumed")
+    func transcriptObservableDuringStreaming() async throws {
+        // AnyLanguageModel #103: the session transcript was not readable
+        // until streaming finished.
+        let session = LanguageModelSession(model: ParityModel.make())
+        let stream = session.streamResponse(
+            to: "Count from one to ten in English words.",
+            options: deterministic
+        )
+
+        var sawPromptMidStream = false
+        for try await _ in stream {
+            if !sawPromptMidStream {
+                sawPromptMidStream = session.transcript.contains { entry in
+                    if case .prompt = entry { return true }
+                    return false
+                }
+            }
+        }
+        #expect(sawPromptMidStream, "the prompt entry should be visible during streaming")
+    }
+
+    @Test("typed streaming yields PartiallyGenerated snapshots settling into the complete value")
+    func typedStreamingPartials() async throws {
+        let session = LanguageModelSession(model: ParityModel.make())
+        let stream = session.streamResponse(
+            to: "Suggest a craft idea about folding a paper crane.",
+            generating: CraftIdea.self,
+            options: deterministic
+        )
+
+        var snapshots = 0
+        var last: CraftIdea.PartiallyGenerated?
+        for try await snapshot in stream {
+            snapshots += 1
+            last = snapshot.content
+        }
+        #expect(snapshots >= 1)
+        let final = try #require(last)
+        #expect(final.title?.isEmpty == false)
+        #expect(final.category != nil)
+    }
+
     @Test("@Generable enum properties decode to a valid case")
     func generableEnumProperty() async throws {
         let session = LanguageModelSession(model: ParityModel.make())
@@ -743,6 +831,17 @@ enum CraftCategory: String {
     case origami = "origami project"
     case knitting = "knitting project"
     case pottery = "pottery project"
+}
+
+@Generable(description: "A list of activities")
+struct ActivityList: Equatable {
+    var items: [TravelActivity]
+}
+
+@Generable(description: "A craft project idea")
+struct PlainCraftIdea: Equatable {
+    var title: String
+    var category: CraftCategory
 }
 
 @Generable(description: "A craft project idea")

@@ -314,3 +314,57 @@ extension JSONNode: Codable {
         init?(intValue: Int) { nil }
     }
 }
+
+
+// MARK: - Lenient parsing (streaming partials)
+
+extension JSONNode {
+    /// Parses a possibly-incomplete JSON prefix by truncating any trailing
+    /// partial literal and closing open strings, arrays, and objects.
+    static func parseLenient(_ text: String) -> JSONNode? {
+        if let complete = try? parse(text) { return complete }
+
+        var repaired = String(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !repaired.isEmpty else { return nil }
+
+        // Drop a trailing partial token that cannot be completed (e.g. `tru`,
+        // `-1.2e`, or a dangling comma/colon), conservatively.
+        while let last = repaired.last, "+-.eEtfnu".contains(last) || last == "," || last == ":" {
+            repaired.removeLast()
+        }
+
+        var closers: [Character] = []
+        var inString = false
+        var escaped = false
+        for character in repaired {
+            if escaped { escaped = false; continue }
+            if inString {
+                if character == "\\" { escaped = true }
+                else if character == "\"" { inString = false }
+                continue
+            }
+            switch character {
+            case "\"": inString = true
+            case "{": closers.append("}")
+            case "[": closers.append("]")
+            case "}", "]": if !closers.isEmpty { closers.removeLast() }
+            default: break
+            }
+        }
+        if inString { repaired.append("\"") }
+        // A key without a value cannot be closed into a valid object.
+        while let last = repaired.last, last == "," || last == ":" {
+            repaired.removeLast()
+        }
+        if let lastColon = repaired.last, lastColon == ":" { repaired.removeLast() }
+        repaired.append(contentsOf: closers.reversed())
+
+        if let node = try? parse(repaired) { return node }
+
+        // Final fallback: also drop a trailing dangling key string.
+        if repaired.hasSuffix("\"}") || repaired.hasSuffix("\"]") {
+            return nil
+        }
+        return nil
+    }
+}

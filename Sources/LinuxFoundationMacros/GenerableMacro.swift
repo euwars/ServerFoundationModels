@@ -9,6 +9,7 @@
 // single self-contained JSON Schema. This deliberately avoids the broken
 // reference-resolution paths seen in other FoundationModels clones.
 
+import Foundation
 import SwiftSyntax
 import SwiftSyntaxMacros
 
@@ -22,6 +23,22 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         var isOptional: Bool
         var guideDescription: String?
         var guideExpressions: [String]
+
+        /// The streaming-partial counterpart of the base type, with array
+        /// sugar translated structurally ([X] -> [X.PartiallyGenerated]) to
+        /// avoid member-type lookup on sugared array types.
+        var partialType: String {
+            func translate(_ type: String) -> String {
+                let trimmed = type.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                    let inner = String(trimmed.dropFirst().dropLast())
+                    // Dictionary sugar is not generable; only arrays appear here.
+                    return "[\(translate(inner))]"
+                }
+                return "\(trimmed).PartiallyGenerated"
+            }
+            return translate(baseType)
+        }
 
         /// The non-optional base type, for schema/decoding generics.
         var baseType: String {
@@ -135,6 +152,28 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             \(raw: schemaProperties)
                     ]
                 )
+            }
+            """
+        )
+
+        // PartiallyGenerated — the streaming view: every property optional,
+        // decoded leniently from partial content.
+        let partialFields = properties
+            .map { "    public var \($0.name): \($0.partialType)?" }
+            .joined(separator: "\n")
+        let partialDecoding = properties
+            .map { "        self.\($0.name) = try? generatedContent.value(\($0.partialType)?.self, forProperty: \"\($0.name)\") ?? nil" }
+            .joined(separator: "\n")
+        members.append(
+            """
+            public struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                public var id: GenerationID
+            \(raw: partialFields)
+
+                public init(_ generatedContent: GeneratedContent) throws {
+                    self.id = generatedContent.id ?? GenerationID()
+            \(raw: partialDecoding.isEmpty ? "        _ = generatedContent" : partialDecoding)
+                }
             }
             """
         )

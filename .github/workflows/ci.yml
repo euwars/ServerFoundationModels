@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The API surface must keep matching the vendored SDK 27 interface.
+  api-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: API parity audit
+        run: |
+          python3 scripts/api-audit.py | tee audit.txt
+          grep -q "MISSING types: 0" audit.txt
+          grep -q "MISSING members (name-level): 0" audit.txt
+
+  # Linux build + model-free API tests; behavior tests need a local model
+  # server (PARITY_BACKEND=chat-completions) and run on self-hosted runners.
+  linux:
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build --build-tests
+      - name: API parity tests (no model required)
+        run: swift test --filter 'APIParityScenarios'
+
+  # Full parity suite (both libraries, on-device model) runs on macOS 27
+  # runners with Apple Intelligence enabled; documented for self-hosted use.
+  macos-parity:
+    if: ${{ false }}  # enable on a self-hosted macos-27 runner
+    runs-on: [self-hosted, macos-27]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Full parity suite
+        run: swift test --build-system native

@@ -120,13 +120,13 @@ public final class LanguageModelSession: @unchecked Sendable {
         instructionsText: String?,
         transcript: Transcript?
     ) {
+        // One executor per unique configuration, created lazily and reused —
+        // matching the framework's documented caching contract.
         let configuration = model.executorConfiguration
+        let cache = ExecutorCache<Model.Executor>()
         self.perform = { request, channel in
-            let executor: Model.Executor
-            do {
-                executor = try Model.Executor(configuration: configuration)
-            } catch {
-                throw LanguageModelTransportError(statusCode: 0, message: "failed to create executor: \(error)")
+            let executor = try cache.executor {
+                try Model.Executor(configuration: configuration)
             }
             try await executor.respond(to: request, model: model, streamingInto: channel)
         }
@@ -283,6 +283,153 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
 
         return ResponseStream(stream: stream)
+    }
+
+    // MARK: Streaming — typed Generable
+
+    public func streamResponse<Content>(
+        to prompt: String,
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<Content> where Content: Generable {
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>.makeStream()
+
+        Task {
+            do {
+                setResponding(true)
+                let preCount = transcript.count
+                let schema = Content.generationSchema
+                appendEntry(.prompt(Transcript.Prompt(
+                    segments: [.text(.init(content: prompt))],
+                    options: options,
+                    responseFormat: Transcript.ResponseFormat(schema: schema)
+                )))
+
+                let result = try await generateLoop(schema: schema, options: options) { cumulative in
+                    guard let partialRaw = GeneratedContent.partial(json: Self.stripCodeFences(from: cumulative)),
+                        let partial = try? Content.PartiallyGenerated(partialRaw)
+                    else { return }
+                    continuation.yield(ResponseStream<Content>.Snapshot(
+                        content: partial,
+                        rawContent: partialRaw
+                    ))
+                }
+
+                let raw: GeneratedContent
+                let final: Content.PartiallyGenerated
+                do {
+                    raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
+                    final = try Content.PartiallyGenerated(raw)
+                } catch {
+                    throw GenerationError.decodingFailure(.init(
+                        debugDescription: "failed to decode \(Content.self) from streamed response (\(error))"
+                    ))
+                }
+                appendEntry(.response(Transcript.Response(
+                    segments: [.structure(.init(content: raw))]
+                )))
+                continuation.yield(ResponseStream<Content>.Snapshot(
+                    content: final,
+                    rawContent: raw,
+                    transcriptEntries: transcript.allEntries[preCount...],
+                    usage: result.usage
+                ))
+                setResponding(false)
+                continuation.finish()
+            } catch {
+                setResponding(false)
+                continuation.finish(throwing: error)
+            }
+        }
+
+        return ResponseStream(stream: stream)
+    }
+
+    public func streamResponse<Content>(
+        to prompt: Prompt,
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<Content> where Content: Generable {
+        streamResponse(to: prompt.text, generating: type, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    public func streamResponse<Content>(
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<Content> where Content: Generable {
+        streamResponse(to: try prompt().text, generating: type, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    // MARK: Prompt-typed and builder overloads
+
+    public func respond(
+        to prompt: Prompt,
+        options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<String> {
+        try await respond(to: prompt.text, options: options)
+    }
+
+    public func respond(
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<String> {
+        try await respond(to: try prompt().text, options: options)
+    }
+
+    public func respond(
+        to prompt: Prompt,
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<GeneratedContent> {
+        try await respond(to: prompt.text, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    public func respond(
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<GeneratedContent> {
+        try await respond(to: try prompt().text, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    public func respond<Content>(
+        to prompt: Prompt,
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respond(to: prompt.text, generating: type, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    public func respond<Content>(
+        generating type: Content.Type = Content.self,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respond(to: try prompt().text, generating: type, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    public func streamResponse(
+        to prompt: Prompt,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) -> ResponseStream<String> {
+        streamResponse(to: prompt.text, options: options)
+    }
+
+    public func streamResponse(
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<String> {
+        streamResponse(to: try prompt().text, options: options)
     }
 
     // MARK: Generation loop
@@ -670,6 +817,22 @@ public final class LanguageModelSession: @unchecked Sendable {
                 usage: last.usage
             )
         }
+    }
+}
+
+// MARK: - Executor caching
+
+final class ExecutorCache<Executor>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cached: Executor?
+
+    func executor(_ make: () throws -> Executor) throws -> Executor {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached { return cached }
+        let executor = try make()
+        cached = executor
+        return executor
     }
 }
 

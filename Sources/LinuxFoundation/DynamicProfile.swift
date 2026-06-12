@@ -117,12 +117,10 @@ typealias ErasedPerform = @Sendable (
 
 func erasePerform<Model: LanguageModel>(_ model: Model) -> ErasedPerform {
     let configuration = model.executorConfiguration
+    let cache = ExecutorCache<Model.Executor>()
     return { request, channel in
-        let executor: Model.Executor
-        do {
-            executor = try Model.Executor(configuration: configuration)
-        } catch {
-            throw LanguageModelTransportError(statusCode: 0, message: "failed to create executor: \(error)")
+        let executor = try cache.executor {
+            try Model.Executor(configuration: configuration)
         }
         try await executor.respond(to: request, model: model, streamingInto: channel)
     }

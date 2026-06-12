@@ -128,6 +128,11 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
 
     public static var null: GeneratedContent { GeneratedContent(node: .null) }
 
+    /// Parses a possibly-incomplete JSON prefix, marking the result partial.
+    static func partial(json: String) -> GeneratedContent? {
+        JSONNode.parseLenient(json).map { GeneratedContent(node: $0, isComplete: false) }
+    }
+
     public var debugDescription: String { "GeneratedContent(\(node.serialized))" }
 
     public static func == (lhs: GeneratedContent, rhs: GeneratedContent) -> Bool {
