@@ -23,6 +23,13 @@ public struct Attachment<Content: AttachmentContent> {
     public var label: String?
     public var content: Content
 
+    /// The error encountered when a non-throwing convenience initializer
+    /// (e.g. `init(imageURL:)`) failed to load or encode its source. The
+    /// attachment then carries empty content; check this to detect the
+    /// failure, or use the throwing variants (`init(contentsOf:orientation:)`,
+    /// `init(ciImage:orientation:)`) to have it propagated instead.
+    public var loadError: (any Error)?
+
     public init(label: String? = nil, content: Content) {
         self.label = label
         self.content = content
@@ -30,28 +37,67 @@ public struct Attachment<Content: AttachmentContent> {
 
     /// Returns a copy carrying the given label.
     public func label(_ label: String) -> Attachment<Content> {
-        Attachment(label: label, content: content)
+        var copy = Attachment(label: label, content: content)
+        copy.loadError = loadError
+        return copy
     }
 }
 
 #if canImport(CoreImage)
 extension Attachment where Content == ImageAttachmentContent {
+    /// Non-throwing for source parity with the SDK; if PNG encoding fails,
+    /// the attachment carries empty data and the failure is surfaced via
+    /// `loadError`. Use `init(ciImage:orientation:)` to have it thrown.
     public init(_ ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) {
+        do {
+            try self.init(ciImage: ciImage, orientation: orientation)
+        } catch {
+            self.init(content: ImageAttachmentContent(
+                data: Data(), mimeType: "image/png", orientation: orientation
+            ))
+            self.loadError = error
+        }
+    }
+
+    /// Throwing variant of `init(_:orientation:)`: propagates PNG-encoding
+    /// failures instead of producing an empty attachment.
+    public init(ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) throws {
         let context = CIContext()
-        let data = context.pngRepresentation(
+        guard let data = context.pngRepresentation(
             of: ciImage, format: .RGBA8, colorSpace: ciImage.colorSpace ?? CGColorSpaceCreateDeviceRGB()
-        ) ?? Data()
-        self.init(content: ImageAttachmentContent(data: data, mimeType: "image/png"))
+        ) else {
+            throw GeneratedContentError("could not encode CIImage as PNG")
+        }
+        self.init(content: ImageAttachmentContent(
+            data: data, mimeType: "image/png", orientation: orientation
+        ))
     }
 
     public init(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation? = nil) {
         self.init(CIImage(cvPixelBuffer: pixelBuffer), orientation: orientation)
     }
 
+    /// Non-throwing for source parity with the SDK; if reading `imageURL`
+    /// fails, the attachment carries empty data and the failure is surfaced
+    /// via `loadError`. Use `init(contentsOf:orientation:)` to have it thrown.
     public init(imageURL: URL, orientation: CGImagePropertyOrientation? = nil) {
+        do {
+            try self.init(contentsOf: imageURL, orientation: orientation)
+        } catch {
+            self.init(content: ImageAttachmentContent(
+                data: Data(), mimeType: nil, orientation: orientation
+            ))
+            self.loadError = error
+        }
+    }
+
+    /// Throwing variant of `init(imageURL:orientation:)`: propagates IO
+    /// failures instead of producing an empty attachment.
+    public init(contentsOf imageURL: URL, orientation: CGImagePropertyOrientation? = nil) throws {
         self.init(content: ImageAttachmentContent(
-            data: (try? Data(contentsOf: imageURL)) ?? Data(),
-            mimeType: nil
+            data: try Data(contentsOf: imageURL),
+            mimeType: nil,
+            orientation: orientation
         ))
     }
 }
@@ -71,6 +117,18 @@ public struct ImageAttachmentContent: AttachmentContent, Sendable, Equatable {
     public var data: Data
     public var mimeType: String?
 
+    #if canImport(CoreImage)
+    /// The display orientation of the image, when one was provided at load
+    /// time. Only available on platforms with ImageIO.
+    public var orientation: CGImagePropertyOrientation?
+
+    public init(data: Data, mimeType: String?, orientation: CGImagePropertyOrientation?) {
+        self.data = data
+        self.mimeType = mimeType
+        self.orientation = orientation
+    }
+    #endif
+
     public init(data: Data, mimeType: String? = nil) {
         self.data = data
         self.mimeType = mimeType
@@ -86,7 +144,14 @@ public struct ImageReference: Sendable, Equatable, Generable {
     }
 
     public init(_ content: GeneratedContent) throws {
-        self.attachmentLabel = try content.value(String?.self, forProperty: "attachmentLabel") ?? ""
+        // A complete ImageReference without a label cannot resolve any
+        // attachment, so a missing/null label is an error rather than "".
+        // (Streaming partials may legitimately omit it; see
+        // `PartiallyGenerated.attachmentLabel`, which stays optional.)
+        guard let label = try content.value(String?.self, forProperty: "attachmentLabel") else {
+            throw GeneratedContentError("ImageReference is missing 'attachmentLabel'")
+        }
+        self.attachmentLabel = label
     }
 
     /// The attached image this reference points to, if present in the
