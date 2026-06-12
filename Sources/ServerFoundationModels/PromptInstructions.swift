@@ -30,7 +30,9 @@ public struct PromptBuilder {
         for component in repeat each components {
             texts.append(component.promptRepresentation.text)
         }
-        return Prompt(text: texts.joined(separator: "\n"))
+        // Empty components (e.g. a false `if` via buildOptional, or an empty
+        // buildArray) contribute nothing rather than a blank line.
+        return Prompt(text: texts.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 
     @_disfavoredOverload
@@ -61,7 +63,7 @@ public struct PromptBuilder {
     }
 
     public static func buildArray(_ prompts: [some PromptRepresentable]) -> Prompt {
-        Prompt(text: prompts.map { $0.promptRepresentation.text }.joined(separator: "\n"))
+        Prompt(text: prompts.map { $0.promptRepresentation.text }.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 
     public static func buildLimitedAvailability(_ prompt: some PromptRepresentable) -> Prompt {
@@ -96,7 +98,9 @@ public struct InstructionsBuilder {
         for component in repeat each components {
             texts.append(component.instructionsRepresentation.text)
         }
-        return Instructions(text: texts.joined(separator: "\n"))
+        // Empty components (e.g. a false `if` via buildOptional, or an empty
+        // buildArray) contribute nothing rather than a blank line.
+        return Instructions(text: texts.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 
     @_disfavoredOverload
@@ -127,7 +131,7 @@ public struct InstructionsBuilder {
     }
 
     public static func buildArray(_ instructions: [some InstructionsRepresentable]) -> Instructions {
-        Instructions(text: instructions.map { $0.instructionsRepresentation.text }.joined(separator: "\n"))
+        Instructions(text: instructions.map { $0.instructionsRepresentation.text }.filter { !$0.isEmpty }.joined(separator: "\n"))
     }
 
     public static func buildLimitedAvailability(_ instructions: some InstructionsRepresentable) -> Instructions {
