@@ -23,6 +23,10 @@ public final class LanguageModelSession: @unchecked Sendable {
     /// Set for profile-based sessions; re-evaluated before every request.
     var profileResolver: (() -> ResolvedProfile)?
 
+    /// Session-scoped property storage, readable from tools and dynamic
+    /// instructions via @SessionProperty.
+    public let properties = SessionPropertyValues()
+
     public var transcript: Transcript {
         lock.lock()
         defer { lock.unlock() }
@@ -75,6 +79,28 @@ public final class LanguageModelSession: @unchecked Sendable {
         transcript: Transcript
     ) {
         self.init(erasing: model, tools: tools, instructionsText: nil, transcript: transcript)
+    }
+
+    /// A session driven by standalone dynamic instructions.
+    public convenience init(
+        model: some LanguageModel = SystemLanguageModel.default,
+        dynamicInstructions: sending some DynamicInstructions,
+        history: some Collection<Transcript.Entry> = []
+    ) {
+        self.init(
+            erasing: model,
+            tools: [],
+            instructionsText: nil,
+            transcript: Transcript(entries: Array(history))
+        )
+        let erased = AnyDynamicInstructions(dynamicInstructions)
+        self.properties.rootDynamicInstructions = erased
+        self.profileResolver = {
+            var resolved = ResolvedProfile()
+            let text = erased.allInstructionTexts.joined(separator: "\n\n")
+            resolved.instructionsText = text.isEmpty ? nil : text
+            return resolved
+        }
     }
 
     /// A session whose model, instructions, and option overrides come from a
@@ -269,8 +295,12 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) async throws -> LoopResult {
         while true {
             // Profile-based sessions re-resolve model/instructions/options
-            // before every request.
-            let resolved = profileResolver?()
+            // before every request; resolution and tool execution see this
+            // session's properties via the task-local context.
+            properties.history = transcript.allEntries[...]
+            let resolved = SessionPropertyValues.$current.withValue(properties) {
+                profileResolver?()
+            }
             var requestEntries = transcript.allEntries
             if let transform = resolved?.historyTransform {
                 // Matching Apple: the transform receives the full request
@@ -312,9 +342,12 @@ public final class LanguageModelSession: @unchecked Sendable {
             request.executableTools = tools
 
             let perform = resolved?.perform ?? self.perform
+            let properties = self.properties
             let executorTask = Task {
                 defer { channel.finish() }
-                try await perform(request, channel)
+                try await SessionPropertyValues.$current.withValue(properties) {
+                    try await perform(request, channel)
+                }
             }
 
             var text = ""
@@ -434,7 +467,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                 guard let tool = tools.first(where: { $0.name == call.toolName }) else {
                     throw LanguageModelTransportError(statusCode: 0, message: "the model called unregistered tool \(call.toolName)")
                 }
-                let output = try await tool.call(call.arguments)
+                let output = try await SessionPropertyValues.$current.withValue(properties) {
+                    try await tool.call(call.arguments)
+                }
                 appendEntry(.toolOutput(Transcript.ToolOutput(
                     id: call.id,
                     toolName: call.toolName,

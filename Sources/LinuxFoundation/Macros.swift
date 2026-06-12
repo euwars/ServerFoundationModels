@@ -12,3 +12,12 @@ public macro Guide(description: String) =
 @attached(peer)
 public macro Guide<T>(description: String? = nil, _ guides: GenerationGuide<T>...) =
     #externalMacro(module: "LinuxFoundationMacros", type: "GuideMacro") where T: Generable
+
+@attached(accessor)
+@attached(peer, names: prefixed(__Key_))
+public macro SessionPropertyEntry() =
+    #externalMacro(module: "LinuxFoundationMacros", type: "SessionPropertyEntryMacro")
+
+@attached(accessor)
+public macro __SessionPropertyEntryDefaultValue() =
+    #externalMacro(module: "LinuxFoundationMacros", type: "SessionPropertyEntryDefaultValueMacro")

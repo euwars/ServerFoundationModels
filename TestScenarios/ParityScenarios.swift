@@ -325,6 +325,26 @@ struct BehaviorParityScenarios {
         }
     }
 
+    @Test("session properties flow to tools via @SessionProperty during calls")
+    func sessionPropertiesReachTools() async throws {
+        let recorder = CallRecorder()
+        let session = LanguageModelSession(
+            model: ParityModel.make(),
+            tools: [FavoriteColorTool(recorder: recorder)],
+            instructions: "Use the favoriteColor tool to answer questions about the user's favorite color. Always call the tool."
+        )
+
+        #expect(session.properties.parityUserName == "anonymous")
+        session.properties.parityUserName = "Farzad"
+
+        let response = try await session.respond(
+            to: "What is the user's favorite color? Use the favoriteColor tool.",
+            options: deterministic
+        )
+        #expect(!response.content.isEmpty)
+        #expect(recorder.calls == ["Farzad"])
+    }
+
     @Test("a dynamic profile session responds and re-resolves the profile across mode switches")
     func dynamicProfileSession() async throws {
         // Mirrors the Origami sample's orchestrator: one session, a profile
@@ -612,6 +632,32 @@ struct CraftIdea: Equatable {
 struct ImageNote {
     var image: ImageReference
     var note: String
+}
+
+extension SessionPropertyValues {
+    @SessionPropertyEntry var parityUserName: String = "anonymous"
+}
+
+struct FavoriteColorTool: Tool {
+    typealias Arguments = GeneratedContent
+    typealias Output = String
+
+    let recorder: CallRecorder
+
+    @SessionProperty(\.parityUserName) var userName
+
+    var name: String { "favoriteColor" }
+    var description: String { "Returns the favorite color of the current user." }
+
+    var parameters: GenerationSchema {
+        let root = DynamicGenerationSchema(name: "arguments", properties: [])
+        return try! GenerationSchema(root: root, dependencies: [])
+    }
+
+    func call(arguments: GeneratedContent) async throws -> String {
+        recorder.record(userName)
+        return "\(userName)'s favorite color is teal."
+    }
 }
 
 // MARK: - Shared test fixtures
