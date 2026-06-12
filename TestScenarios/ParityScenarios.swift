@@ -677,6 +677,40 @@ struct APIParityScenarios {
         #expect(restored == plan)
     }
 
+    @Test("every scalar kind, optionals, and raw-value-less enums round-trip")
+    func generableKitchenSinkRoundTrip() throws {
+        _ = KitchenSink.generationSchema
+
+        let record = KitchenSink(
+            isActive: true,
+            count: 7,
+            ratio: 0.5,
+            weight: 2.25,
+            // Binary-exact so equality survives the JSON number round-trip
+            // (19.99 would drift identically on Apple's implementation too).
+            price: Decimal(string: "4.25")!,
+            nickname: "sink",
+            luckyNumber: nil,
+            mood: .excited,
+            pastMoods: [.neutral, .skeptical]
+        )
+        let restored = try KitchenSink(try GeneratedContent(json: record.generatedContent.jsonString))
+        #expect(restored == record)
+
+        // nil and non-nil optionals both survive the trip.
+        var sparse = record
+        sparse.nickname = nil
+        sparse.luckyNumber = 42
+        let sparseRestored = try KitchenSink(try GeneratedContent(json: sparse.generatedContent.jsonString))
+        #expect(sparseRestored == sparse)
+
+        // A raw-value-less enum decodes from its case name and rejects strangers.
+        #expect(try ParityMood(GeneratedContent(json: "\"skeptical\"")) == .skeptical)
+        #expect(throws: (any Error).self) {
+            _ = try ParityMood(try GeneratedContent(json: "\"furious\""))
+        }
+    }
+
     @Test("an unresolvable schema reference throws SchemaError.undefinedReferences")
     func schemaErrorUndefinedReferences() throws {
         let dangling = DynamicGenerationSchema(
@@ -1063,6 +1097,27 @@ struct CraftIdea: Equatable {
     var title: String
     @Guide(description: "The category that best fits the idea")
     var category: CraftCategory
+}
+
+@Generable(description: "How the assistant feels about an idea")
+enum ParityMood {
+    case excited
+    case neutral
+    case skeptical
+}
+
+@Generable(description: "A record exercising every scalar kind")
+struct KitchenSink: Equatable {
+    @Guide(description: "Whether the record is active")
+    var isActive: Bool
+    var count: Int
+    var ratio: Double
+    var weight: Float
+    var price: Decimal
+    var nickname: String?
+    var luckyNumber: Int?
+    var mood: ParityMood
+    var pastMoods: [ParityMood]
 }
 
 @Generable(description: "A note about an attached image")

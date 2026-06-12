@@ -183,16 +183,10 @@ extension Never: Generable {
 
 // MARK: - Optional
 
-extension Optional: ConvertibleFromGeneratedContent where Wrapped: ConvertibleFromGeneratedContent {
-    public init(_ content: GeneratedContent) throws {
-        if case .null = content.node {
-            self = nil
-        } else {
-            self = try Wrapped(content)
-        }
-    }
-}
-
+// Apple's Optional is deliberately NOT Generable and NOT
+// ConvertibleFromGeneratedContent: optional decoding goes through
+// `GeneratedContent.value(_: Value?.Type, forProperty:)`, and an extra
+// conformance here would make `Property(name:type: String?.self)` ambiguous.
 extension Optional: PromptRepresentable where Wrapped: ConvertibleToGeneratedContent {}
 extension Optional: InstructionsRepresentable where Wrapped: ConvertibleToGeneratedContent {}
 
@@ -205,10 +199,8 @@ extension Optional: ConvertibleToGeneratedContent where Wrapped: ConvertibleToGe
     }
 }
 
-extension Optional: Generable where Wrapped: Generable {
-    public static var generationSchema: GenerationSchema {
-        Wrapped.generationSchema
-    }
+extension Optional where Wrapped: Generable {
+    public typealias PartiallyGenerated = Wrapped.PartiallyGenerated
 }
 
 // MARK: - Array
