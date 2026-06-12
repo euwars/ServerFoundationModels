@@ -99,7 +99,9 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
             public init() {}
         }
 
-        public init(configuration: Configuration) throws {}
+        public init(configuration: Configuration) {}
+
+        public func prewarm(model: SystemLanguageModel, transcript: Transcript) {}
 
         public func respond(
             to request: LanguageModelExecutorGenerationRequest,
@@ -533,6 +535,10 @@ private func convertNode(_ node: SchemaNode) -> FoundationModels.DynamicGenerati
             )
     case .reference(let name):
         return FoundationModels.DynamicGenerationSchema(referenceTo: name)
+    case .anyOf(let name, let description, let choices):
+        return FoundationModels.DynamicGenerationSchema(
+            name: name, description: description, anyOf: choices.map(convertNode)
+        )
     case .raw:
         return FoundationModels.DynamicGenerationSchema(name: "value", properties: [])
     }

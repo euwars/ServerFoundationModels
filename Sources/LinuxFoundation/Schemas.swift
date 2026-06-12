@@ -21,6 +21,7 @@ indirect enum SchemaNode: Sendable, Equatable {
     case boolean(description: String?)
     case object(name: String, description: String?, properties: [Property])
     case array(description: String?, item: SchemaNode, minimumElements: Int?, maximumElements: Int?)
+    case anyOf(name: String, description: String?, choices: [SchemaNode])
     case reference(String)
     /// An opaque JSON Schema document (from decoding a serialized schema).
     case raw(JSONNode)
@@ -30,6 +31,8 @@ indirect enum SchemaNode: Sendable, Equatable {
         switch self {
         case .reference(let name):
             references.insert(name)
+        case .anyOf(_, _, let choices):
+            for choice in choices { choice.collectReferences(into: &references) }
         case .object(_, _, let properties):
             for property in properties {
                 property.node.collectReferences(into: &references)
@@ -53,6 +56,12 @@ indirect enum SchemaNode: Sendable, Equatable {
             return nil
         case .array(_, let item, _, _):
             return item.findObject(named: target)
+        case .anyOf(let name, _, let choices):
+            if name == target { return self }
+            for choice in choices {
+                if let found = choice.findObject(named: target) { return found }
+            }
+            return nil
         case .string, .integer, .number, .boolean, .reference, .raw:
             return nil
         }
@@ -117,6 +126,9 @@ indirect enum SchemaNode: Sendable, Equatable {
             if let maximumElements {
                 members.append(.init(key: "maxItems", value: .integer(maximumElements)))
             }
+        case .anyOf(_, let description, let choices):
+            describe(description)
+            members.append(.init(key: "anyOf", value: .array(choices.map(\.jsonSchema))))
         case .reference(let name):
             members.append(.init(key: "$ref", value: .string("#/$defs/\(name)")))
         case .raw(let node):
@@ -249,6 +261,37 @@ extension GenerationGuide where Value == Int {
     }
 }
 
+extension GenerationGuide where Value == Float {
+    public static func minimum(_ value: Float) -> GenerationGuide<Float> {
+        GenerationGuide<Float>([.minimumNumber(Double(value))])
+    }
+
+    public static func maximum(_ value: Float) -> GenerationGuide<Float> {
+        GenerationGuide<Float>([.maximumNumber(Double(value))])
+    }
+
+    public static func range(_ range: ClosedRange<Float>) -> GenerationGuide<Float> {
+        GenerationGuide<Float>([.minimumNumber(Double(range.lowerBound)), .maximumNumber(Double(range.upperBound))])
+    }
+}
+
+extension GenerationGuide where Value == Decimal {
+    public static func minimum(_ value: Decimal) -> GenerationGuide<Decimal> {
+        GenerationGuide<Decimal>([.minimumNumber((value as NSDecimalNumber).doubleValue)])
+    }
+
+    public static func maximum(_ value: Decimal) -> GenerationGuide<Decimal> {
+        GenerationGuide<Decimal>([.maximumNumber((value as NSDecimalNumber).doubleValue)])
+    }
+
+    public static func range(_ range: ClosedRange<Decimal>) -> GenerationGuide<Decimal> {
+        GenerationGuide<Decimal>([
+            .minimumNumber((range.lowerBound as NSDecimalNumber).doubleValue),
+            .maximumNumber((range.upperBound as NSDecimalNumber).doubleValue),
+        ])
+    }
+}
+
 extension GenerationGuide where Value == Double {
     public static func minimum(_ value: Double) -> GenerationGuide<Double> {
         GenerationGuide<Double>([.minimumNumber(value)])
@@ -265,24 +308,24 @@ extension GenerationGuide where Value == Double {
 
 extension GenerationGuide {
     /// Applies a guide to every element of an array.
-    public static func element<Element>(_ guide: GenerationGuide<Element>) -> GenerationGuide<Value> where Value == [Element] {
-        GenerationGuide<Value>([.element(guide.constraints)])
+    public static func element<Element>(_ guide: GenerationGuide<Element>) -> GenerationGuide<[Element]> where Value == [Element] {
+        GenerationGuide<[Element]>([.element(guide.constraints)])
     }
 
-    public static func minimumCount<Element>(_ count: Int) -> GenerationGuide<Value> where Value == [Element] {
-        GenerationGuide<Value>([.minimumCount(count)])
+    public static func minimumCount<Element>(_ count: Int) -> GenerationGuide<[Element]> where Value == [Element] {
+        GenerationGuide<[Element]>([.minimumCount(count)])
     }
 
-    public static func maximumCount<Element>(_ count: Int) -> GenerationGuide<Value> where Value == [Element] {
-        GenerationGuide<Value>([.maximumCount(count)])
+    public static func maximumCount<Element>(_ count: Int) -> GenerationGuide<[Element]> where Value == [Element] {
+        GenerationGuide<[Element]>([.maximumCount(count)])
     }
 
-    public static func count<Element>(_ count: Int) -> GenerationGuide<Value> where Value == [Element] {
-        GenerationGuide<Value>([.minimumCount(count), .maximumCount(count)])
+    public static func count<Element>(_ count: Int) -> GenerationGuide<[Element]> where Value == [Element] {
+        GenerationGuide<[Element]>([.minimumCount(count), .maximumCount(count)])
     }
 
-    public static func count<Element>(_ range: ClosedRange<Int>) -> GenerationGuide<Value> where Value == [Element] {
-        GenerationGuide<Value>([.minimumCount(range.lowerBound), .maximumCount(range.upperBound)])
+    public static func count<Element>(_ range: ClosedRange<Int>) -> GenerationGuide<[Element]> where Value == [Element] {
+        GenerationGuide<[Element]>([.minimumCount(range.lowerBound), .maximumCount(range.upperBound)])
     }
 }
 
@@ -370,6 +413,23 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
         self.root = .string(description: description, enumChoices: choices, pattern: nil)
     }
 
+    public init(type: any Generable.Type, description: String? = nil, anyOf types: [any Generable.Type]) {
+        self.root = .anyOf(
+            name: String(describing: type),
+            description: description,
+            choices: types.map { $0.generationSchema.root }
+        )
+    }
+
+    public init(
+        type: any Generable.Type,
+        description: String? = nil,
+        representNilExplicitlyInGeneratedContent explicitNil: Bool,
+        properties: [Property]
+    ) {
+        self.init(type: type, description: description, properties: properties)
+    }
+
     public init(type: any Generable.Type, description: String? = nil, properties: [Property]) {
         self.root = .object(
             name: String(describing: type),
@@ -438,6 +498,32 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
             self.node = guides.reduce(SchemaCycleGuard.node(for: Value.self)) { $1.apply(to: $0) }
             self.isOptional = true
         }
+
+        /// Regex guides are advisory: Swift's Regex does not expose its
+        /// source pattern for schema rendering.
+        public init<RegexOutput>(
+            name: String,
+            description: String? = nil,
+            type: String.Type,
+            guides: [Regex<RegexOutput>] = []
+        ) {
+            self.name = name
+            self.description = description
+            self.node = .string(description: nil, enumChoices: nil, pattern: nil)
+            self.isOptional = false
+        }
+
+        public init<RegexOutput>(
+            name: String,
+            description: String? = nil,
+            type: String?.Type,
+            guides: [Regex<RegexOutput>] = []
+        ) {
+            self.name = name
+            self.description = description
+            self.node = .string(description: nil, enumChoices: nil, pattern: nil)
+            self.isOptional = true
+        }
     }
 }
 
@@ -458,6 +544,19 @@ public struct DynamicGenerationSchema: Sendable {
 
     public init(name: String, description: String? = nil, anyOf choices: [String]) {
         self.node = .string(description: description, enumChoices: choices, pattern: nil)
+    }
+
+    public init(name: String, description: String? = nil, anyOf choices: [DynamicGenerationSchema]) {
+        self.node = .anyOf(name: name, description: description, choices: choices.map(\.node))
+    }
+
+    public init(
+        name: String,
+        description: String? = nil,
+        representNilExplicitlyInGeneratedContent explicitNil: Bool,
+        properties: [Property]
+    ) {
+        self.init(name: name, description: description, properties: properties)
     }
 
     public init<Value>(type: Value.Type, guides: [GenerationGuide<Value>] = []) where Value: Generable {

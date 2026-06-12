@@ -67,6 +67,20 @@ extension LanguageModelSession {
     public func logFeedbackAttachment(
         sentiment: LanguageModelFeedback.Sentiment?,
         issues: [LanguageModelFeedback.Issue] = [],
+        desiredResponseContent: (any ConvertibleToGeneratedContent)?
+    ) -> Data {
+        let entry = desiredResponseContent.map { content in
+            Transcript.Entry.response(Transcript.Response(
+                segments: [.structure(.init(content: content.generatedContent))]
+            ))
+        }
+        return logFeedbackAttachment(sentiment: sentiment, issues: issues, desiredOutput: entry)
+    }
+
+    @discardableResult
+    public func logFeedbackAttachment(
+        sentiment: LanguageModelFeedback.Sentiment?,
+        issues: [LanguageModelFeedback.Issue] = [],
         desiredResponseText: String?
     ) -> Data {
         let entry = desiredResponseText.map { content in

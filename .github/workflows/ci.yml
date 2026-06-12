@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: API parity audit
+      - name: API parity audit (name-level)
         run: |
           python3 scripts/api-audit.py | tee audit.txt
           grep -q "MISSING types: 0" audit.txt
@@ -26,8 +26,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: swift build --build-tests
-      - name: API parity tests (no model required)
-        run: swift test --filter 'APIParityScenarios'
+      - name: API + differential parity tests (no model required)
+        run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios'
+      - name: Signature-level interface diff
+        run: |
+          swift build -Xswiftc -enable-library-evolution \
+            -Xswiftc -emit-module-interface-path -Xswiftc /tmp/LinuxFoundation.swiftinterface \
+            --target LinuxFoundation
+          python3 scripts/interface-diff.py \
+            reference/FoundationModels-macOS27.swiftinterface /tmp/LinuxFoundation.swiftinterface
 
   # Full parity suite (both libraries, on-device model) runs on macOS 27
   # runners with Apple Intelligence enabled; documented for self-hosted use.

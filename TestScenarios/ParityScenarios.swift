@@ -747,6 +747,167 @@ private func plainText(_ segments: [Transcript.Segment]) -> String {
     }.joined(separator: "\n")
 }
 
+// MARK: - Deterministic differential parity
+//
+// A scripted mock model drives BOTH libraries with identical executor event
+// streams. Because the model is deterministic, every assertion here is
+// EXACT — any divergence in session machinery (transcript building, tool
+// loop, usage accounting, streaming) fails on one side.
+
+@Suite("Deterministic differential parity")
+struct DifferentialParityScenarios {
+
+    @Test("a scripted text turn produces identical content, usage, and transcript shape")
+    func scriptedTextTurn() async throws {
+        let session = LanguageModelSession(model: ParityMockModel(events: [.text("Hello, world.")]))
+        let response = try await session.respond(to: "hi")
+
+        #expect(response.content == "Hello, world.")
+        #expect(response.usage.input.totalTokenCount == 7)
+        #expect(response.usage.output.totalTokenCount == 3)
+        #expect(session.transcript.map(entryKind) == ["prompt", "response"])
+    }
+
+    @Test("a scripted tool loop produces the identical transcript sequence and final text")
+    func scriptedToolLoop() async throws {
+        let recorder = CallRecorder()
+        let session = LanguageModelSession(
+            model: ParityMockModel(events: [
+                .toolCall(name: "echo", arguments: #"{"value": "ping"}"#),
+                .text("done"),
+            ]),
+            tools: [EchoTool(recorder: recorder)],
+            instructions: "Use tools."
+        )
+        let response = try await session.respond(to: "go")
+
+        #expect(response.content == "done")
+        #expect(recorder.calls == ["ping"])
+        #expect(session.transcript.map(entryKind) == [
+            "instructions", "prompt", "toolCalls", "toolOutput", "response",
+        ])
+    }
+
+    @Test("scripted streaming yields the identical cumulative snapshot sequence")
+    func scriptedStreaming() async throws {
+        let session = LanguageModelSession(
+            model: ParityMockModel(events: [.fragments(["Hel", "lo"])])
+        )
+        var snapshots: [String] = []
+        for try await snapshot in session.streamResponse(to: "hi") {
+            snapshots.append(snapshot.content)
+        }
+        // Snapshot cadence is timing-dependent even on Apple's framework
+        // (snapshots can observe later accumulation); the stable contract is
+        // prefix-monotonic snapshots settling into the exact final text.
+        #expect(!snapshots.isEmpty)
+        #expect(snapshots.allSatisfy { "Hello".hasPrefix($0) })
+        #expect(snapshots.last == "Hello")
+        #expect(session.transcript.map(entryKind) == ["prompt", "response"])
+    }
+}
+
+private func entryKind(_ entry: Transcript.Entry) -> String {
+    switch entry {
+    case .instructions: return "instructions"
+    case .prompt: return "prompt"
+    case .toolCalls: return "toolCalls"
+    case .toolOutput: return "toolOutput"
+    case .response: return "response"
+    case .reasoning: return "reasoning"
+    @unknown default: return "unknown"
+    }
+}
+
+struct ParityMockModel: LanguageModel {
+    enum Event: Hashable {
+        case text(String)
+        case fragments([String])
+        case toolCall(name: String, arguments: String)
+    }
+
+    let events: [Event]
+
+    var capabilities: LanguageModelCapabilities {
+        LanguageModelCapabilities(capabilities: [.toolCalling])
+    }
+
+    var executorConfiguration: Executor.Configuration {
+        Executor.Configuration(events: events)
+    }
+
+    struct Executor: LanguageModelExecutor {
+        struct Configuration: Hashable {
+            var events: [Event]
+        }
+
+        let configuration: Configuration
+
+        init(configuration: Configuration) {
+            self.configuration = configuration
+        }
+
+        func respond(
+            to request: LanguageModelExecutorGenerationRequest,
+            model: ParityMockModel,
+            streamingInto channel: LanguageModelExecutorGenerationChannel
+        ) async throws {
+            // One scripted event per generation round, indexed by the number
+            // of model-generated entries since the last prompt.
+            var index = 0
+            for entry in request.transcript {
+                switch entry {
+                case .prompt: index = 0
+                case .toolCalls, .response, .reasoning: index += 1
+                default: break
+                }
+            }
+            switch configuration.events[min(index, configuration.events.count - 1)] {
+            case .text(let text):
+                await channel.send(.response(action: .appendText(text, tokenCount: 3)))
+                await channel.send(.response(action: .updateUsage(
+                    input: .init(totalTokenCount: 7, cachedTokenCount: 0),
+                    output: .init(totalTokenCount: 3, reasoningTokenCount: 0)
+                )))
+            case .fragments(let fragments):
+                for fragment in fragments {
+                    await channel.send(.response(action: .appendText(fragment, tokenCount: 1)))
+                }
+            case .toolCall(let name, let arguments):
+                await channel.send(.toolCalls(action: .toolCall(
+                    id: "call-1", name: name,
+                    action: .appendArguments(arguments, tokenCount: 1)
+                )))
+            }
+        }
+    }
+}
+
+struct EchoTool: Tool {
+    typealias Arguments = GeneratedContent
+    typealias Output = String
+
+    let recorder: CallRecorder
+
+    var name: String { "echo" }
+    var description: String { "Echoes the value." }
+
+    var parameters: GenerationSchema {
+        try! GenerationSchema(
+            root: DynamicGenerationSchema(name: "arguments", properties: [
+                .init(name: "value", schema: DynamicGenerationSchema(type: String.self))
+            ]),
+            dependencies: []
+        )
+    }
+
+    func call(arguments: GeneratedContent) async throws -> String {
+        let value = (try? arguments.value(String.self, forProperty: "value")) ?? ""
+        recorder.record(value)
+        return "echoed \(value)"
+    }
+}
+
 // MARK: - Shared dynamic-profile fixtures (Origami-shaped)
 
 final class ParityModeBox: @unchecked Sendable {

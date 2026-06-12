@@ -6,6 +6,11 @@
 // unchanged.
 
 import Foundation
+#if canImport(CoreImage)
+import CoreImage
+import CoreVideo
+import ImageIO
+#endif
 
 public struct GenerationID: Sendable, Hashable {
     let raw: UUID
@@ -28,6 +33,29 @@ public struct Attachment<Content: AttachmentContent> {
         Attachment(label: label, content: content)
     }
 }
+
+#if canImport(CoreImage)
+extension Attachment where Content == ImageAttachmentContent {
+    public init(_ ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) {
+        let context = CIContext()
+        let data = context.pngRepresentation(
+            of: ciImage, format: .RGBA8, colorSpace: ciImage.colorSpace ?? CGColorSpaceCreateDeviceRGB()
+        ) ?? Data()
+        self.init(content: ImageAttachmentContent(data: data, mimeType: "image/png"))
+    }
+
+    public init(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation? = nil) {
+        self.init(CIImage(cvPixelBuffer: pixelBuffer), orientation: orientation)
+    }
+
+    public init(imageURL: URL, orientation: CGImagePropertyOrientation? = nil) {
+        self.init(content: ImageAttachmentContent(
+            data: (try? Data(contentsOf: imageURL)) ?? Data(),
+            mimeType: nil
+        ))
+    }
+}
+#endif
 
 extension Attachment: PromptRepresentable, InstructionsRepresentable {
     public var promptRepresentation: Prompt {
@@ -156,13 +184,13 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
             public var limitIncreaseSuggestion: QuotaUsage.LimitIncreaseSuggestion?
             public var resetDate: Date?
             public init(
-                debugDescription: String,
                 limitIncreaseSuggestion: QuotaUsage.LimitIncreaseSuggestion? = nil,
-                resetDate: Date? = nil
+                resetDate: Date? = nil,
+                debugDescription: String
             ) {
-                self.debugDescription = debugDescription
                 self.limitIncreaseSuggestion = limitIncreaseSuggestion
                 self.resetDate = resetDate
+                self.debugDescription = debugDescription
             }
         }
 
@@ -235,7 +263,9 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
             public init() {}
         }
 
-        public init(configuration: Configuration) throws {}
+        public init(configuration: Configuration) {}
+
+        public func prewarm(model: PrivateCloudComputeLanguageModel, transcript: Transcript) {}
 
         public func respond(
             to request: LanguageModelExecutorGenerationRequest,

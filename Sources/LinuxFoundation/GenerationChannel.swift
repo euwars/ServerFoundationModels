@@ -29,6 +29,10 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
         public mutating func next() async throws -> (any Event)? {
             await iterator.next()
         }
+
+        public mutating func next(isolation actor: isolated (any Actor)?) async throws -> (any Event)? {
+            await iterator.next(isolation: actor)
+        }
     }
 
     public func makeAsyncIterator() -> AsyncIterator {

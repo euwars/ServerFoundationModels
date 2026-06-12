@@ -82,6 +82,66 @@ public final class LanguageModelSession: @unchecked Sendable {
         self.init(erasing: model, tools: tools, instructionsText: nil, transcript: transcript)
     }
 
+    public convenience init(
+        model: SystemLanguageModel = .default,
+        tools: [any Tool] = [],
+        instructions: Instructions? = nil
+    ) {
+        self.init(erasing: model, tools: tools, instructionsText: instructions?.text, transcript: nil)
+    }
+
+    @_disfavoredOverload
+    public convenience init(
+        model: SystemLanguageModel = .default,
+        tools: [any Tool] = [],
+        instructions: String? = nil
+    ) {
+        self.init(erasing: model, tools: tools, instructionsText: instructions, transcript: nil)
+    }
+
+    public convenience init(
+        model: SystemLanguageModel = .default,
+        tools: [any Tool] = [],
+        @InstructionsBuilder instructions: () throws -> Instructions
+    ) rethrows {
+        self.init(erasing: model, tools: tools, instructionsText: try instructions().text, transcript: nil)
+    }
+
+    public convenience init(
+        model: SystemLanguageModel = .default,
+        tools: [any Tool] = [],
+        transcript: Transcript
+    ) {
+        self.init(erasing: model, tools: tools, instructionsText: nil, transcript: transcript)
+    }
+
+    public convenience init<Failure>(
+        model: any LanguageModel,
+        tools: [any Tool] = [],
+        @InstructionsBuilder instructions: () throws(Failure) -> Instructions
+    ) throws(Failure) where Failure: Swift.Error {
+        let text = try instructions().text
+        self.init(erasingAny: model, tools: tools, instructionsText: text)
+    }
+
+    private convenience init(erasingAny model: any LanguageModel, tools: [any Tool], instructionsText: String?) {
+        func open<M: LanguageModel>(_ model: M) -> (
+            @Sendable (LanguageModelExecutorGenerationRequest, LanguageModelExecutorGenerationChannel) async throws -> Void
+        ) {
+            erasePerform(model)
+        }
+        self.init(erasing: SystemLanguageModel.default, tools: tools, instructionsText: instructionsText, transcript: nil)
+        let perform = open(model)
+        self.profileResolver = { [properties] in
+            var resolved = SessionPropertyValues.$current.withValue(properties) {
+                ResolvedProfile()
+            }
+            resolved.perform = perform
+            resolved.instructionsText = instructionsText
+            return resolved
+        }
+    }
+
     /// A session driven by standalone dynamic instructions.
     public convenience init(
         model: some LanguageModel = SystemLanguageModel.default,
@@ -157,6 +217,29 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: String,
         options: GenerationOptions = GenerationOptions()
     ) async throws -> Response<String> {
+        try await respond(to: prompt, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func streamResponse(
+        to prompt: String,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<String> {
+        streamResponse(to: prompt, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func streamResponse(
+        to prompt: Prompt,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<String> {
+        streamResponse(to: prompt.text, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func respond(
+        to prompt: String,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<String> {
         try await withRespondingFlag {
             let preCount = transcript.count
             appendEntry(.prompt(Transcript.Prompt(
@@ -164,7 +247,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 options: options
             )))
 
-            let result = try await generateLoop(schema: nil, options: options, onCumulativeText: nil)
+            let result = try await generateLoop(
+                schema: nil, options: options,
+                contextOptions: contextOptions, metadata: metadata,
+                onCumulativeText: nil
+            )
 
             let responseEntry = Transcript.Response(segments: [.text(.init(content: result.text))])
             appendEntry(.response(responseEntry))
@@ -183,8 +270,36 @@ public final class LanguageModelSession: @unchecked Sendable {
     public func respond(
         to prompt: String,
         schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<GeneratedContent> {
+        try await respondStructured(
+            to: prompt, schema: schema,
+            includeSchemaInPrompt: contextOptions.includeSchemaInPrompt ?? true,
+            options: options, contextOptions: contextOptions, metadata: metadata
+        )
+    }
+
+    public func respond(
+        to prompt: String,
+        schema: GenerationSchema,
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<GeneratedContent> {
+        try await respondStructured(
+            to: prompt, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
+    }
+
+    private func respondStructured(
+        to prompt: String,
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool,
+        options: GenerationOptions,
+        contextOptions: ContextOptions,
+        metadata: [String: any Sendable & Codable & Equatable]
     ) async throws -> Response<GeneratedContent> {
         try await withRespondingFlag {
             let preCount = transcript.count
@@ -194,7 +309,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 responseFormat: Transcript.ResponseFormat(schema: schema)
             )))
 
-            let result = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
+            let result = try await generateLoop(
+                schema: schema, options: options,
+                contextOptions: contextOptions, metadata: metadata,
+                onCumulativeText: nil
+            )
             let content = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
 
             appendEntry(.response(Transcript.Response(
@@ -214,8 +333,34 @@ public final class LanguageModelSession: @unchecked Sendable {
     public func respond<Content>(
         to prompt: String,
         generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respondTyped(
+            to: prompt, generating: type,
+            options: options, contextOptions: contextOptions, metadata: metadata
+        )
+    }
+
+    public func respond<Content>(
+        to prompt: String,
+        generating type: Content.Type = Content.self,
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respondTyped(
+            to: prompt, generating: type,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
+    }
+
+    private func respondTyped<Content>(
+        to prompt: String,
+        generating type: Content.Type,
+        options: GenerationOptions,
+        contextOptions: ContextOptions,
+        metadata: [String: any Sendable & Codable & Equatable]
     ) async throws -> Response<Content> where Content: Generable {
         try await withRespondingFlag {
             let preCount = transcript.count
@@ -226,7 +371,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 responseFormat: Transcript.ResponseFormat(schema: schema)
             )))
 
-            let result = try await generateLoop(schema: schema, options: options, onCumulativeText: nil)
+            let result = try await generateLoop(
+                schema: schema, options: options,
+                contextOptions: contextOptions, metadata: metadata,
+                onCumulativeText: nil
+            )
             let raw: GeneratedContent
             let content: Content
             do {
@@ -254,7 +403,9 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     public func streamResponse(
         to prompt: String,
-        options: GenerationOptions = GenerationOptions()
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> ResponseStream<String> {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>.makeStream()
 
@@ -266,7 +417,10 @@ public final class LanguageModelSession: @unchecked Sendable {
                     options: options
                 )))
 
-                let result = try await generateLoop(schema: nil, options: options) { cumulative in
+                let result = try await generateLoop(
+                    schema: nil, options: options,
+                    contextOptions: contextOptions, metadata: metadata
+                ) { cumulative in
                     continuation.yield(ResponseStream<String>.Snapshot(
                         content: cumulative,
                         rawContent: cumulative.generatedContent
@@ -290,8 +444,28 @@ public final class LanguageModelSession: @unchecked Sendable {
     public func streamResponse<Content>(
         to prompt: String,
         generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) -> ResponseStream<Content> where Content: Generable {
+        streamTyped(to: prompt, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse<Content>(
+        to prompt: String,
+        generating type: Content.Type = Content.self,
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<Content> where Content: Generable {
+        streamTyped(to: prompt, generating: type, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    private func streamTyped<Content>(
+        to prompt: String,
+        generating type: Content.Type,
+        options: GenerationOptions,
+        contextOptions: ContextOptions,
+        metadata: [String: any Sendable & Codable & Equatable]
     ) -> ResponseStream<Content> where Content: Generable {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>.makeStream()
 
@@ -306,7 +480,10 @@ public final class LanguageModelSession: @unchecked Sendable {
                     responseFormat: Transcript.ResponseFormat(schema: schema)
                 )))
 
-                let result = try await generateLoop(schema: schema, options: options) { cumulative in
+                let result = try await generateLoop(
+                    schema: schema, options: options,
+                    contextOptions: contextOptions, metadata: metadata
+                ) { cumulative in
                     guard let partialRaw = GeneratedContent.partial(json: Self.stripCodeFences(from: cumulative)),
                         let partial = try? Content.PartiallyGenerated(partialRaw)
                     else { return }
@@ -362,6 +539,197 @@ public final class LanguageModelSession: @unchecked Sendable {
         @PromptBuilder prompt: () throws -> Prompt
     ) rethrows -> ResponseStream<Content> where Content: Generable {
         streamResponse(to: try prompt().text, generating: type, includeSchemaInPrompt: includeSchemaInPrompt, options: options)
+    }
+
+    // MARK: Prompt-typed and builder overloads (full SDK 27 matrix)
+
+    public func respond(
+        to prompt: Prompt,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<String> {
+        try await respond(to: prompt.text, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func respond(
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<String> {
+        try await respond(to: try prompt().text, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func respond(
+        to prompt: Prompt,
+        schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<GeneratedContent> {
+        try await respond(to: prompt.text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func respond(
+        schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<GeneratedContent> {
+        try await respond(to: try prompt().text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func respond<Content>(
+        to prompt: Prompt,
+        generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respond(to: prompt.text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func respond<Content>(
+        generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) async throws -> Response<Content> where Content: Generable {
+        try await respond(to: try prompt().text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse(
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<String> {
+        streamResponse(to: try prompt().text, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse(
+        to prompt: String,
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<GeneratedContent> {
+        streamStructured(to: prompt, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func streamResponse(
+        to prompt: String,
+        schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) -> ResponseStream<GeneratedContent> {
+        streamStructured(to: prompt, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse(
+        to prompt: Prompt,
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions()
+    ) -> ResponseStream<GeneratedContent> {
+        streamStructured(to: prompt.text, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func streamResponse(
+        to prompt: Prompt,
+        schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) -> ResponseStream<GeneratedContent> {
+        streamStructured(to: prompt.text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse(
+        schema: GenerationSchema,
+        includeSchemaInPrompt: Bool = true,
+        options: GenerationOptions = GenerationOptions(),
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<GeneratedContent> {
+        streamStructured(to: try prompt().text, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+    }
+
+    public func streamResponse(
+        schema: GenerationSchema,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<GeneratedContent> {
+        streamStructured(to: try prompt().text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    /// GeneratedContent-typed streaming over an explicit schema.
+    private func streamStructured(
+        to prompt: String,
+        schema: GenerationSchema,
+        options: GenerationOptions,
+        contextOptions: ContextOptions,
+        metadata: [String: any Sendable & Codable & Equatable]
+    ) -> ResponseStream<GeneratedContent> {
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<GeneratedContent>.Snapshot, any Swift.Error>.makeStream()
+        Task {
+            do {
+                setResponding(true)
+                let preCount = transcript.count
+                appendEntry(.prompt(Transcript.Prompt(
+                    segments: [.text(.init(content: prompt))],
+                    options: options,
+                    responseFormat: Transcript.ResponseFormat(schema: schema)
+                )))
+                let result = try await generateLoop(
+                    schema: schema, options: options,
+                    contextOptions: contextOptions, metadata: metadata
+                ) { cumulative in
+                    if let partial = GeneratedContent.partial(json: Self.stripCodeFences(from: cumulative)) {
+                        continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
+                            content: partial, rawContent: partial
+                        ))
+                    }
+                }
+                let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
+                appendEntry(.response(Transcript.Response(segments: [.structure(.init(content: raw))])))
+                continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
+                    content: raw, rawContent: raw,
+                    transcriptEntries: transcript.allEntries[preCount...],
+                    usage: result.usage
+                ))
+                setResponding(false)
+                continuation.finish()
+            } catch {
+                setResponding(false)
+                continuation.finish(throwing: error)
+            }
+        }
+        return ResponseStream(stream: stream)
+    }
+
+    public func streamResponse<Content>(
+        to prompt: Prompt,
+        generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
+    ) -> ResponseStream<Content> where Content: Generable {
+        streamTyped(to: prompt.text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
+    }
+
+    public func streamResponse<Content>(
+        generating type: Content.Type = Content.self,
+        options: GenerationOptions = GenerationOptions(),
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        @PromptBuilder prompt: () throws -> Prompt
+    ) rethrows -> ResponseStream<Content> where Content: Generable {
+        streamTyped(to: try prompt().text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
     }
 
     // MARK: Prompt-typed and builder overloads
@@ -510,6 +878,8 @@ public final class LanguageModelSession: @unchecked Sendable {
     private func generateLoop(
         schema: GenerationSchema?,
         options: GenerationOptions,
+        contextOptions: ContextOptions = ContextOptions(),
+        metadata: [String: any Sendable & Codable & Equatable] = [:],
         onCumulativeText: (@Sendable (String) -> Void)?
     ) async throws -> LoopResult {
         var turnUsage = Usage()
@@ -533,7 +903,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 schema: schema,
                 generationOptions: effectiveOptions
             )
-            request.contextOptions = ContextOptions(reasoningLevel: resolved?.reasoningLevel)
+            request.contextOptions = ContextOptions(
+                includeSchemaInPrompt: contextOptions.includeSchemaInPrompt,
+                reasoningLevel: contextOptions.reasoningLevel ?? resolved?.reasoningLevel
+            )
+            request.metadata = metadata
             request.executableTools = activeTools
 
             let perform = resolved?.perform ?? self.perform
@@ -654,6 +1028,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                     for output in recordedOutputs {
                         for action in resolved.onToolOutput { try await action(output) }
                     }
+                    for (call, output) in zip(recordedCalls, recordedOutputs) {
+                        for action in resolved.onToolCallOutputPair { try await action(call, output) }
+                    }
                 }
             }
 
@@ -693,6 +1070,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                 if let resolved {
                     for action in resolved.onToolCall { try await action(call) }
                     for action in resolved.onToolOutput { try await action(toolOutput) }
+                    for action in resolved.onToolCallOutputPair { try await action(call, toolOutput) }
                 }
             }
         }
@@ -806,17 +1184,23 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
         public var input: Input
         public var output: Output
-        public var metadata: [String: any Sendable]
+        public var metadata: [String: any Sendable & Codable & Equatable]
 
         /// Combined input and output token count.
         public var totalTokenCount: Int {
             input.totalTokenCount + output.totalTokenCount
         }
 
-        public init(input: Input = Input(), output: Output = Output(), metadata: [String: any Sendable] = [:]) {
+        public init(input: Input, output: Output, metadata: [String: any Sendable & Codable & Equatable] = [:]) {
             self.input = input
             self.output = output
             self.metadata = metadata
+        }
+
+        init() {
+            self.input = Input()
+            self.output = Output()
+            self.metadata = [:]
         }
     }
 
@@ -837,6 +1221,10 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             public mutating func next() async throws -> Snapshot? {
                 try await iterator.next()
+            }
+
+            public mutating func next(isolation actor: isolated (any Actor)? = #isolation) async throws -> Snapshot? {
+                try await iterator.next(isolation: actor)
             }
         }
 

@@ -109,6 +109,7 @@ struct PrimitiveProfileModifier: LanguageModelSession.DynamicProfileModifier {
         case onResponse((Transcript.Response) async throws -> Void)
         case onToolCall((Transcript.ToolCall) async throws -> Void)
         case onToolOutput((Transcript.ToolOutput) async throws -> Void)
+        case onToolCallOutputPair((Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void)
         case onActivate(() async -> Void)
         case onDeactivate(() async -> Void)
     }
@@ -263,6 +264,15 @@ extension LanguageModelSession.DynamicProfile {
         onToolOutput { _ in try await action() }
     }
 
+    public func onToolOutput(
+        perform action: @escaping (Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self,
+            modifier: PrimitiveProfileModifier(kind: .onToolCallOutputPair(action))
+        )
+    }
+
     public func onActivate(
         perform action: @escaping () async -> Void
     ) -> some LanguageModelSession.DynamicProfile {
@@ -297,6 +307,7 @@ struct ResolvedProfile {
     var onResponse: [(Transcript.Response) async throws -> Void] = []
     var onToolCall: [(Transcript.ToolCall) async throws -> Void] = []
     var onToolOutput: [(Transcript.ToolOutput) async throws -> Void] = []
+    var onToolCallOutputPair: [(Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void] = []
     var onActivate: [() async -> Void] = []
     var onDeactivate: [() async -> Void] = []
 }
@@ -361,6 +372,7 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
             case .onResponse(let action): resolved.onResponse.append(action)
             case .onToolCall(let action): resolved.onToolCall.append(action)
             case .onToolOutput(let action): resolved.onToolOutput.append(action)
+            case .onToolCallOutputPair(let action): resolved.onToolCallOutputPair.append(action)
             case .onActivate(let action): resolved.onActivate.append(action)
             case .onDeactivate(let action): resolved.onDeactivate.append(action)
             }

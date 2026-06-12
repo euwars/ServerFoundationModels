@@ -11,14 +11,16 @@ public struct GeneratedContentError: Error, CustomStringConvertible {
 
 public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertible {
     let node: JSONNode
+    let generationID: GenerationID?
 
     /// Whether the content represents fully generated (non-partial) output.
     public var isComplete: Bool { complete }
     private let complete: Bool
 
-    init(node: JSONNode, isComplete: Bool = true) {
+    init(node: JSONNode, isComplete: Bool = true, id: GenerationID? = nil) {
         self.node = node
         self.complete = isComplete
+        self.generationID = id
     }
 
     public init(json: String) throws {
@@ -32,17 +34,49 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
             )
         }
         self.complete = true
+        self.generationID = nil
     }
 
-    public init(properties: KeyValuePairs<String, any ConvertibleToGeneratedContent>) {
+    public init(properties: KeyValuePairs<String, any ConvertibleToGeneratedContent>, id: GenerationID? = nil) {
         let members = properties.map { key, value in
             JSONNode.Member(key: key, value: value.generatedContent.node)
         }
-        self.init(node: .object(members))
+        self.init(node: .object(members), id: id)
+    }
+
+    public init<S>(
+        properties: S,
+        id: GenerationID? = nil,
+        uniquingKeysWith combine: (GeneratedContent, GeneratedContent) throws -> some ConvertibleToGeneratedContent
+    ) rethrows where S: Sequence, S.Element == (String, any ConvertibleToGeneratedContent) {
+        var members: [JSONNode.Member] = []
+        var indexByKey: [String: Int] = [:]
+        for (key, value) in properties {
+            if let existing = indexByKey[key] {
+                let merged = try combine(
+                    GeneratedContent(node: members[existing].value),
+                    value.generatedContent
+                )
+                members[existing] = JSONNode.Member(key: key, value: merged.generatedContent.node)
+            } else {
+                indexByKey[key] = members.count
+                members.append(JSONNode.Member(key: key, value: value.generatedContent.node))
+            }
+        }
+        self.init(node: .object(members), id: id)
+    }
+
+    public init<S>(elements: S, id: GenerationID? = nil)
+    where S: Sequence, S.Element == any ConvertibleToGeneratedContent {
+        self.init(node: .array(elements.map { $0.generatedContent.node }), id: id)
     }
 
     public init(_ value: some ConvertibleToGeneratedContent) {
         self = value.generatedContent
+    }
+
+    public init(_ value: some ConvertibleToGeneratedContent, id: GenerationID) {
+        self.init(node: value.generatedContent.node, id: id)
     }
 
     public var jsonString: String { node.serialized }
@@ -124,9 +158,9 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
     }
 
     /// The id of the generation this content came from, when known.
-    public var id: GenerationID? { nil }
+    public var id: GenerationID? { generationID }
 
-    public static var null: GeneratedContent { GeneratedContent(node: .null) }
+    public static let null = GeneratedContent(node: .null)
 
     /// Parses a possibly-incomplete JSON prefix, marking the result partial.
     static func partial(json: String) -> GeneratedContent? {

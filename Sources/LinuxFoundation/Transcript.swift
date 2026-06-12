@@ -44,10 +44,10 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         }
     }
 
-    public mutating func replaceSubrange(
+    public mutating func replaceSubrange<C>(
         _ subrange: Range<Int>,
-        with newElements: some Collection<Entry>
-    ) {
+        with newElements: consuming C
+    ) where C: Collection, C.Element == Entry {
         entries.replaceSubrange(subrange, with: newElements)
     }
 
@@ -98,7 +98,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
             case (.structure(let a), .structure(let b)): return a == b
             case (.attachment(let a), .attachment(let b)): return a == b
             case (.custom(let a), .custom(let b)):
-                return a.id == b.id && a.description == b.description
+                return a.isEqual(to: b)
             default: return false
             }
         }
@@ -196,7 +196,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public init(
             id: String = UUID().uuidString,
             segments: [Segment],
-            toolDefinitions: [ToolDefinition] = []
+            toolDefinitions: [ToolDefinition]
         ) {
             self.id = id
             self.segments = segments
@@ -256,7 +256,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
         public init(
             id: String = UUID().uuidString,
-            assetIDs: [String] = [],
+            assetIDs: [String],
             segments: [Segment]
         ) {
             self.id = id
@@ -267,7 +267,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
         public init(
             id: String = UUID().uuidString,
-            metadata: [String: any Sendable & Codable & Equatable],
+            metadata: [String: any Sendable & Codable & Equatable] = [:],
             segments: [Segment]
         ) {
             self.id = id
@@ -309,7 +309,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var arguments: GeneratedContent
         public var metadata: [String: any Codable & Sendable & Equatable]
 
-        public init(id: String = UUID().uuidString, toolName: String, arguments: GeneratedContent) {
+        public init(id: String, toolName: String, arguments: GeneratedContent) {
             self.id = id
             self.toolName = toolName
             self.arguments = arguments
@@ -338,7 +338,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var toolName: String
         public var segments: [Segment]
 
-        public init(id: String = UUID().uuidString, toolName: String, segments: [Segment]) {
+        public init(id: String, toolName: String, segments: [Segment]) {
             self.id = id
             self.toolName = toolName
             self.segments = segments
@@ -372,6 +372,12 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var name: String
         public var description: String
         public var parameters: GenerationSchema
+
+        public init(tool: any Tool) {
+            self.name = tool.name
+            self.description = tool.description
+            self.parameters = tool.parameters
+        }
 
         public init(name: String, description: String, parameters: GenerationSchema) {
             self.name = name
@@ -492,7 +498,7 @@ extension Transcript.CustomSegment {
     public var instructionsRepresentation: Instructions { Instructions(text: description) }
 
     /// Type-erased equality, used when comparing segments.
-    public func isEqual(_ other: any Transcript.CustomSegment) -> Bool {
+    public func isEqual(to other: any Transcript.CustomSegment) -> Bool {
         guard let other = other as? Self else { return false }
         return self == other
     }
@@ -634,16 +640,15 @@ extension Transcript.ImageAttachment {
     /// The source URL, when the image was loaded from one.
     public var url: URL? { sourceURL }
 
-    public init(_ ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) throws {
+    public init(_ ciImage: CIImage, orientation: CGImagePropertyOrientation? = nil) {
         let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            throw GeneratedContentError("could not render CIImage")
-        }
+        let cgImage = context.createCGImage(ciImage, from: ciImage.extent)
+            ?? context.createCGImage(CIImage(color: .black).cropped(to: .init(x: 0, y: 0, width: 1, height: 1)), from: .init(x: 0, y: 0, width: 1, height: 1))!
         self.init(cgImage, orientation: orientation)
     }
 
-    public init(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation? = nil) throws {
-        try self.init(CIImage(cvPixelBuffer: pixelBuffer), orientation: orientation)
+    public init(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation? = nil) {
+        self.init(CIImage(cvPixelBuffer: pixelBuffer), orientation: orientation)
     }
 
     public init(imageURL: URL, orientation: CGImagePropertyOrientation? = nil) throws {

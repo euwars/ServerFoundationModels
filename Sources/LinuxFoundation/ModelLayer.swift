@@ -35,7 +35,7 @@ public struct GenerationOptions: Sendable, Equatable {
             case required
             case disallowed
         }
-        public let kind: Kind
+        public var kind: Kind
 
         public static let allowed = ToolCallingMode(kind: .allowed)
         public static let required = ToolCallingMode(kind: .required)
@@ -60,6 +60,16 @@ public struct GenerationOptions: Sendable, Equatable {
         maximumResponseTokens: Int? = nil
     ) {
         self.samplingMode = samplingMode
+        self.temperature = temperature
+        self.maximumResponseTokens = maximumResponseTokens
+    }
+
+    public init(
+        sampling: SamplingMode?,
+        temperature: Double? = nil,
+        maximumResponseTokens: Int? = nil
+    ) {
+        self.samplingMode = sampling
         self.temperature = temperature
         self.maximumResponseTokens = maximumResponseTokens
     }

@@ -55,8 +55,8 @@ extension Never: ResolvableDynamicInstructions {
 }
 
 extension Instructions: DynamicInstructions, ResolvableDynamicInstructions {
-    public var body: Never { fatalError("leaf DynamicInstructions") }
-    public typealias Body = Never
+    // Resolution short-circuits at this leaf; the body is never walked.
+    public var body: some DynamicInstructions { EmptyDynamicInstructions() }
     var resolvedInstructionTexts: [String] { text.isEmpty ? [] : [text] }
 }
 
@@ -180,6 +180,14 @@ extension DynamicInstructions {
     public typealias ForEach = _DynamicInstructionsForEach
 }
 
+extension Optional: DynamicInstructions, ResolvableDynamicInstructions where Wrapped: DynamicInstructions {
+    public var body: Never { fatalError("leaf DynamicInstructions") }
+    public typealias Body = Never
+
+    var resolvedInstructionTexts: [String] { self?.allInstructionTexts ?? [] }
+    var resolvedInstructionTools: [ErasedTool] { self?.allInstructionTools ?? [] }
+}
+
 @resultBuilder
 public struct DynamicInstructionsBuilder {
     // Leaf nodes declare `Body == Never`; their unreachable bodies pass through.
@@ -187,14 +195,22 @@ public struct DynamicInstructionsBuilder {
         content
     }
 
-    public static func buildBlock<each Content: DynamicInstructions>(
-        _ content: repeat each Content
-    ) -> TupleDynamicInstructions<repeat each Content> {
-        TupleDynamicInstructions(repeat each content)
+    public static func buildBlock() -> EmptyDynamicInstructions {
+        EmptyDynamicInstructions()
     }
 
-    public static func buildExpression<Content: DynamicInstructions>(_ content: Content) -> Content {
+    public static func buildBlock<T>(_ content: T) -> T where T: DynamicInstructions {
         content
+    }
+
+    public static func buildBlock<each Content: DynamicInstructions>(
+        _ contents: repeat each Content
+    ) -> TupleDynamicInstructions<repeat each Content> {
+        TupleDynamicInstructions(repeat each contents)
+    }
+
+    public static func buildExpression<T>(_ expression: T) -> T where T: DynamicInstructions {
+        expression
     }
 
     public static func buildExpression(_ text: String) -> Instructions {
@@ -211,11 +227,8 @@ public struct DynamicInstructionsBuilder {
 
     public static func buildOptional<Content: DynamicInstructions>(
         _ content: Content?
-    ) -> ConditionalDynamicInstructions<Content, EmptyDynamicInstructions> {
-        if let content {
-            return ConditionalDynamicInstructions(.trueContent(content))
-        }
-        return ConditionalDynamicInstructions(.falseContent(EmptyDynamicInstructions()))
+    ) -> Content? {
+        content
     }
 
     public static func buildEither<TrueContent, FalseContent>(

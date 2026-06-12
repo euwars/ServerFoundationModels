@@ -129,6 +129,38 @@ extension Double: Generable {
     }
 }
 
+// MARK: - Float
+
+extension Float: Generable {
+    public init(_ content: GeneratedContent) throws {
+        self = Float(try Double(content))
+    }
+
+    public static var generationSchema: GenerationSchema {
+        GenerationSchema(node: .number(description: nil, minimum: nil, maximum: nil))
+    }
+
+    public var generatedContent: GeneratedContent {
+        GeneratedContent(node: .number(Double(self)))
+    }
+}
+
+// MARK: - Decimal
+
+extension Decimal: Generable {
+    public init(_ content: GeneratedContent) throws {
+        self = Decimal(try Double(content))
+    }
+
+    public static var generationSchema: GenerationSchema {
+        GenerationSchema(node: .number(description: nil, minimum: nil, maximum: nil))
+    }
+
+    public var generatedContent: GeneratedContent {
+        GeneratedContent(node: .number((self as NSDecimalNumber).doubleValue))
+    }
+}
+
 // MARK: - Array
 
 // MARK: - Never

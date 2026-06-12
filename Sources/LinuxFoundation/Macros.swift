@@ -13,6 +13,10 @@ public macro Guide(description: String) =
 public macro Guide<T>(description: String? = nil, _ guides: GenerationGuide<T>...) =
     #externalMacro(module: "LinuxFoundationMacros", type: "GuideMacro") where T: Generable
 
+@attached(peer)
+public macro Guide<RegexOutput>(description: String? = nil, _ guides: Regex<RegexOutput>) =
+    #externalMacro(module: "LinuxFoundationMacros", type: "GuideMacro")
+
 @attached(accessor)
 @attached(peer, names: prefixed(__Key_))
 public macro SessionPropertyEntry() =
