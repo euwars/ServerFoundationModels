@@ -43,6 +43,13 @@ public struct GenerationOptions: Sendable, Equatable {
     }
 
     public var samplingMode: SamplingMode?
+
+    /// SDK 27 name for `samplingMode`.
+    public var sampling: SamplingMode? {
+        get { samplingMode }
+        set { samplingMode = newValue }
+    }
+
     public var temperature: Double?
     public var maximumResponseTokens: Int?
     public var toolCallingMode: ToolCallingMode?
@@ -332,5 +339,28 @@ public struct LanguageModelTransportError: Error, CustomStringConvertible {
 
     public var description: String {
         "language model request failed (HTTP \(statusCode)): \(message)"
+    }
+}
+
+
+// MARK: - AnyTool
+
+/// A type-erased tool.
+public struct AnyTool: Tool {
+    public typealias Arguments = GeneratedContent
+    public typealias Output = Prompt
+
+    let erased: ErasedTool
+
+    public init(_ tool: some Tool) {
+        self.erased = ErasedTool(tool)
+    }
+
+    public var name: String { erased.name }
+    public var description: String { erased.description }
+    public var parameters: GenerationSchema { erased.parameters }
+
+    public func call(arguments: GeneratedContent) async throws -> Prompt {
+        Prompt(text: try await erased.call(arguments))
     }
 }

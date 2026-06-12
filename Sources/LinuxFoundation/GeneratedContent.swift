@@ -82,6 +82,52 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
         return try Value(GeneratedContent(node: member.value))
     }
 
+    public enum Kind: Equatable, Sendable {
+        case null
+        case bool(Bool)
+        case number(Double)
+        case string(String)
+        case array([GeneratedContent])
+        case structure(properties: [String: GeneratedContent], orderedKeys: [String])
+    }
+
+    /// A structural view of the value.
+    public var kind: Kind {
+        switch node {
+        case .null: return .null
+        case .bool(let value): return .bool(value)
+        case .integer(let value): return .number(Double(value))
+        case .number(let value): return .number(value)
+        case .string(let value): return .string(value)
+        case .array(let elements): return .array(elements.map { GeneratedContent(node: $0) })
+        case .object(let members):
+            var properties: [String: GeneratedContent] = [:]
+            for member in members { properties[member.key] = GeneratedContent(node: member.value) }
+            return .structure(properties: properties, orderedKeys: members.map(\.key))
+        }
+    }
+
+    public init(kind: Kind, id: GenerationID? = nil) {
+        switch kind {
+        case .null: self.init(node: .null)
+        case .bool(let value): self.init(node: .bool(value))
+        case .number(let value):
+            self.init(node: value == value.rounded() && value.magnitude < 1e15
+                ? .integer(Int(value)) : .number(value))
+        case .string(let value): self.init(node: .string(value))
+        case .array(let elements): self.init(node: .array(elements.map(\.node)))
+        case .structure(let properties, let orderedKeys):
+            self.init(node: .object(orderedKeys.compactMap { key in
+                properties[key].map { JSONNode.Member(key: key, value: $0.node) }
+            }))
+        }
+    }
+
+    /// The id of the generation this content came from, when known.
+    public var id: GenerationID? { nil }
+
+    public static var null: GeneratedContent { GeneratedContent(node: .null) }
+
     public var debugDescription: String { "GeneratedContent(\(node.serialized))" }
 
     public static func == (lhs: GeneratedContent, rhs: GeneratedContent) -> Bool {

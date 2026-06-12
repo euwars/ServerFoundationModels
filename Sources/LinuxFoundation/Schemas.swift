@@ -166,17 +166,20 @@ enum SchemaCycleGuard {
 
 // MARK: - GenerationGuide
 
+enum GenerationGuideConstraint: Sendable {
+    case minimumInt(Int)
+    case maximumInt(Int)
+    case minimumNumber(Double)
+    case maximumNumber(Double)
+    case anyOf([String])
+    case constant(String)
+    case minimumCount(Int)
+    case maximumCount(Int)
+    case element([GenerationGuideConstraint])
+}
+
 public struct GenerationGuide<Value>: Sendable {
-    enum Constraint: Sendable {
-        case minimumInt(Int)
-        case maximumInt(Int)
-        case minimumNumber(Double)
-        case maximumNumber(Double)
-        case anyOf([String])
-        case constant(String)
-        case minimumCount(Int)
-        case maximumCount(Int)
-    }
+    typealias Constraint = GenerationGuideConstraint
 
     let constraints: [Constraint]
 
@@ -204,6 +207,9 @@ public struct GenerationGuide<Value>: Sendable {
                 node = .array(description: description, item: item, minimumElements: count, maximumElements: maximum)
             case (.maximumCount(let count), .array(let description, let item, let minimum, _)):
                 node = .array(description: description, item: item, minimumElements: minimum, maximumElements: count)
+            case (.element(let constraints), .array(let description, let item, let minimum, let maximum)):
+                let guided = GenerationGuide<Never>(constraints).apply(to: item)
+                node = .array(description: description, item: guided, minimumElements: minimum, maximumElements: maximum)
             default:
                 continue
             }
@@ -251,6 +257,11 @@ extension GenerationGuide where Value == Double {
 }
 
 extension GenerationGuide {
+    /// Applies a guide to every element of an array.
+    public static func element<Element>(_ guide: GenerationGuide<Element>) -> GenerationGuide<Value> where Value == [Element] {
+        GenerationGuide<Value>([.element(guide.constraints)])
+    }
+
     public static func minimumCount<Element>(_ count: Int) -> GenerationGuide<Value> where Value == [Element] {
         GenerationGuide<Value>([.minimumCount(count)])
     }
@@ -461,6 +472,17 @@ public struct DynamicGenerationSchema: Sendable {
 
     public init(referenceTo name: String) {
         self.node = .reference(name)
+    }
+
+    /// A schema matching only JSON null.
+    public static var null: DynamicGenerationSchema {
+        DynamicGenerationSchema(node: .raw(.object([
+            .init(key: "type", value: .string("null"))
+        ])))
+    }
+
+    init(node: SchemaNode) {
+        self.node = node
     }
 
     public struct Property: Sendable {
