@@ -5,8 +5,8 @@
 //   Tests/AppleFoundationModelsParityTests  → `import FoundationModels`
 //       runs against Apple's local on-device model (SystemLanguageModel.default)
 //
-//   Tests/OpenFoundationModelsParityTests   → `import OpenFoundationModels`
-//       runs against a local open model (ChatCompletionsLanguageModel → Ollama)
+//   Tests/LinuxFoundationParityTests   → `import LinuxFoundation`
+//       runs against a local on-device model (ChatCompletionsLanguageModel → Ollama)
 //
 // Only the import — and which local model answers — differs. Every line of test
 // code and every assertion is identical. The models are different, so scenarios
@@ -18,13 +18,13 @@
 import Foundation
 import Testing
 
-#if PARITY_SUBJECT_IS_OPEN_FOUNDATION_MODELS
-import OpenFoundationModels
+#if PARITY_SUBJECT_IS_LINUX_FOUNDATION
+import LinuxFoundation
 #elseif canImport(FoundationModels)
 import FoundationModels
 #endif
 
-#if PARITY_SUBJECT_IS_OPEN_FOUNDATION_MODELS || canImport(FoundationModels)
+#if PARITY_SUBJECT_IS_LINUX_FOUNDATION || canImport(FoundationModels)
 
 private let deterministic = GenerationOptions(temperature: 0)
 

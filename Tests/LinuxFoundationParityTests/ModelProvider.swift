@@ -1,11 +1,11 @@
-// OpenFoundationModels-side model provider: a local open model served by
+// LinuxFoundation-side model provider: a local open model served by
 // Ollama (or any OpenAI-compatible server), driven through this package's
 // ChatCompletionsLanguageModel.
 //
 // Override with PARITY_BASE_URL / PARITY_MODEL environment variables.
 
 import Foundation
-import OpenFoundationModels
+import LinuxFoundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
