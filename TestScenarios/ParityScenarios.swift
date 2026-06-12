@@ -65,6 +65,34 @@ struct BehaviorParityScenarios {
         }
     }
 
+    @Test(
+        "soak: long-lived sessions stay correct as their transcripts grow",
+        .enabled(if: ProcessInfo.processInfo.environment["PARITY_SOAK"] != nil, "set PARITY_SOAK=1")
+    )
+    func longLivedSessionSoak() async throws {
+        let rounds = 15
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for worker in 0..<2 {
+                group.addTask {
+                    let session = LanguageModelSession(
+                        model: ParityModel.make(),
+                        instructions: "Answer with a single short word."
+                    )
+                    for round in 0..<rounds {
+                        let response = try await session.respond(
+                            to: "Say ok (worker \(worker), round \(round))",
+                            options: GenerationOptions(temperature: 0, maximumResponseTokens: 64)
+                        )
+                        #expect(!response.content.isEmpty)
+                    }
+                    // Instructions + one prompt and one response per round.
+                    #expect(session.transcript.count == 1 + rounds * 2)
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
     @Test("respond(to:) returns non-empty content and records prompt + response in the transcript")
     func plainTextResponse() async throws {
         let session = LanguageModelSession(model: ParityModel.make())
