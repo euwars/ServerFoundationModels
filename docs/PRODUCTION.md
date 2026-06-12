@@ -5,16 +5,16 @@ does (and deliberately does not do) for you.
 
 ## Transports
 
-| | Default (corelibs URLSession) | `--traits AsyncHTTPClient` |
+| | Default (`AsyncHTTPClient` trait, on) | Opt-out (`traits: []`) |
 |---|---|---|
-| Dependencies | none beyond Foundation | swift-nio + async-http-client |
-| Connections | one shared `URLSession`, kernel-managed | NIO pooled `HTTPClient.shared` |
-| Best for | CLIs, low/medium-concurrency services | high-concurrency servers |
+| Stack | NIO pooled `HTTPClient.shared` | corelibs/Darwin URLSession |
+| Dependencies | swift-nio + async-http-client | swift-log only |
+| Best for | servers (Vapor/Hummingbird already carry NIO) | CLIs, dependency-light builds |
 
-Enable the NIO transport in your `Package.swift` dependency:
+The NIO transport is the default. For a dependency-light build:
 
 ```swift
-.package(url: "…/ServerFoundationModels.git", from: "0.1.0", traits: ["AsyncHTTPClient"])
+.package(url: "…/ServerFoundationModels.git", from: "0.1.0", traits: [])
 ```
 
 Both transports stream SSE, propagate task cancellation into the HTTP
@@ -24,6 +24,21 @@ context-window 400/413 → `.contextSizeExceeded`; everything else →
 `LanguageModelTransportError` carrying status code and body). The SSE
 parser tolerates keep-alive comments, malformed frames, CRLF delimiters,
 and streams that close without `[DONE]` (see `SSEEdgeCaseTests`).
+
+## Logging
+
+Transport diagnostics integrate with [swift-log](https://github.com/apple/swift-log)
+and are **silent by default** (no-op handler). Assign a logger to see them:
+
+```swift
+var model = ChatCompletionsLanguageModel(name: "qwen3", url: endpoint)
+model.logger = Logger(label: "llm")   // your app's configured logger
+```
+
+Emitted events: request lifecycle at `.debug` (model, host, tool count,
+guided flag), HTTP error responses at `.warning` (status + truncated
+provider body), skipped malformed SSE frames at `.debug` (size only).
+Prompt, instruction, and response content is never logged at any level.
 
 ## Sessions and concurrency
 

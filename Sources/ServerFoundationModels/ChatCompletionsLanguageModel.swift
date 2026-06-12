@@ -4,6 +4,7 @@
 // apple/foundation-models-utilities (Apache 2.0).
 
 import Foundation
+import Logging
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -24,6 +25,12 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
     /// Per-request timeout, in seconds.
     public var timeout: TimeInterval
+
+    /// Transport diagnostics via swift-log: request lifecycle at `.debug`,
+    /// HTTP errors at `.warning`, skipped SSE frames at `.debug`. Prompt,
+    /// instruction, and response CONTENT is never logged at any level.
+    /// Silent (no-op handler) unless you assign your own logger.
+    public var logger = Logger(label: "ServerFoundationModels", factory: { _ in SwiftLogNoOpLogHandler() })
 
     public init(
         name: String,
@@ -78,7 +85,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             model: ChatCompletionsLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
+            let logger = model.logger
             let urlRequest = try makeURLRequest(for: request)
+            logger.debug("chat.completions request", metadata: [
+                "model": .string(configuration.modelName),
+                "host": .string(urlRequest.url?.host ?? "?"),
+                "tools": .stringConvertible(request.enabledToolDefinitions.count),
+                "guided": .stringConvertible(request.schema != nil),
+            ])
             let (lines, response) = try await HTTPLineStream.connect(urlRequest)
 
             if response.statusCode != 200 {
@@ -87,6 +101,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     body += line
                     if body.count > 4096 { break }
                 }
+                logger.warning("chat.completions error response", metadata: [
+                    "status": .stringConvertible(response.statusCode),
+                    "body": .string(String(body.prefix(256))),
+                ])
                 if response.statusCode == 429 {
                     let resetDate = response.value(forHTTPHeaderField: "Retry-After")
                         .flatMap(Double.init)
@@ -113,7 +131,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 guard line.hasPrefix("data:") else { continue }
                 let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 if payload == "[DONE]" { break }
-                guard let chunk = try? JSONNode.parse(payload) else { continue }
+                guard let chunk = try? JSONNode.parse(payload) else {
+                    // Frame content is provider JSON, not user text, but log
+                    // only its size to keep the no-content guarantee simple.
+                    logger.debug("skipping malformed SSE frame", metadata: [
+                        "bytes": .stringConvertible(payload.utf8.count)
+                    ])
+                    continue
+                }
 
                 let delta = chunk["choices"]?[0]?["delta"]
                 if case .string(let content) = delta?["content"], !content.isEmpty {

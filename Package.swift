@@ -12,20 +12,24 @@ let package = Package(
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"])
     ],
     traits: [
-        // NIO-based HTTP transport for production Linux streaming
-        // (connection pooling; avoids corelibs URLSession concurrency bugs).
+        // NIO-based HTTP transport (connection pooling; avoids corelibs
+        // URLSession concurrency bugs). Default-on: production servers
+        // already carry NIO. Opt out for a dependency-light build with
+        // `.package(..., traits: [])` — streaming then uses URLSession.
         .trait(name: "AsyncHTTPClient"),
-        .default(enabledTraits: []),
+        .default(enabledTraits: ["AsyncHTTPClient"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ],
     targets: [
         .target(
             name: "ServerFoundationModels",
             dependencies: [
                 "ServerFoundationModelsMacros",
+                .product(name: "Logging", package: "swift-log"),
                 .product(
                     name: "AsyncHTTPClient",
                     package: "async-http-client",
@@ -50,7 +54,10 @@ let package = Package(
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
         .testTarget(
             name: "ServerFoundationModelsParityTests",
-            dependencies: ["ServerFoundationModels"],
+            dependencies: [
+                "ServerFoundationModels",
+                .product(name: "Logging", package: "swift-log"),
+            ],
             swiftSettings: [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),
     ]

@@ -26,17 +26,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: swift build --build-tests
-      - name: API + differential parity tests (no model required)
-        run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests'
+      - name: API + differential parity tests (default traits, NIO transport)
+        run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
+      - name: Transport tests (corelibs URLSession, traits disabled)
+        run: swift test --disable-default-traits --filter 'WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
       - name: Signature-level interface diff
         run: |
-          # -no-verify: interface verification trips over SwiftSyntax module
-          # aliasing from the macro target; the diff is the real gate.
-          swift build -Xswiftc -enable-library-evolution \
-            -Xswiftc -no-verify-emitted-module-interface \
-            -Xswiftc -emit-module-interface-path -Xswiftc /tmp/ServerFoundationModels.swiftinterface \
-            --target ServerFoundationModels
-          apt-get update -qq && apt-get install -y -qq python3 > /dev/null
+          apt-get update -qq && apt-get install -y -qq python3 git > /dev/null
+          # Scoped library evolution: global -Xswiftc flags would break
+          # swift-log/swift-nio, which do not build resiliently.
+          bash scripts/emit-interface.sh /tmp/ServerFoundationModels.swiftinterface
           python3 scripts/interface-diff.py \
             reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 
