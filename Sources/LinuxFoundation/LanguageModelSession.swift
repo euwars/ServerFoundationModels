@@ -409,7 +409,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) -> ResponseStream<String> {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>.makeStream()
 
-        Task {
+        let generation = Task {
             do {
                 setResponding(true)
                 appendEntry(.prompt(Transcript.Prompt(
@@ -436,6 +436,9 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
         }
 
+        continuation.onTermination = { reason in
+            if case .cancelled = reason { generation.cancel() }
+        }
         return ResponseStream(stream: stream)
     }
 
@@ -469,7 +472,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) -> ResponseStream<Content> where Content: Generable {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>.makeStream()
 
-        Task {
+        let generation = Task {
             do {
                 setResponding(true)
                 let preCount = transcript.count
@@ -520,6 +523,9 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
         }
 
+        continuation.onTermination = { reason in
+            if case .cancelled = reason { generation.cancel() }
+        }
         return ResponseStream(stream: stream)
     }
 
@@ -676,7 +682,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         metadata: [String: any Sendable & Codable & Equatable]
     ) -> ResponseStream<GeneratedContent> {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<GeneratedContent>.Snapshot, any Swift.Error>.makeStream()
-        Task {
+        let generation = Task {
             do {
                 setResponding(true)
                 let preCount = transcript.count
@@ -708,6 +714,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                 setResponding(false)
                 continuation.finish(throwing: error)
             }
+        }
+        continuation.onTermination = { reason in
+            if case .cancelled = reason { generation.cancel() }
         }
         return ResponseStream(stream: stream)
     }
@@ -998,7 +1007,12 @@ public final class LanguageModelSession: @unchecked Sendable {
             let toolCalls = toolCallOrder.compactMap { id in
                 toolCallAccumulator[id].map { (id: id, toolName: $0.name, argumentsJSON: $0.argumentsJSON) }
             }
-            try await executorTask.value
+            try await withTaskCancellationHandler {
+                try await executorTask.value
+            } onCancel: {
+                executorTask.cancel()
+            }
+            try Task.checkCancellation()
 
             turnUsage.input.totalTokenCount += usage.input.totalTokenCount
             turnUsage.input.cachedTokenCount += usage.input.cachedTokenCount

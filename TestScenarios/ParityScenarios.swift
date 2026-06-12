@@ -43,6 +43,28 @@ struct BehaviorParityScenarios {
         print("Parity model under test: \(ParityModel.displayName)")
     }
 
+    @Test(
+        "concurrent sessions stress (production trigger for transport races)",
+        .enabled(if: ProcessInfo.processInfo.environment["PARITY_STRESS"] != nil, "set PARITY_STRESS=1")
+    )
+    func concurrentSessionsStress() async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for worker in 0..<8 {
+                group.addTask {
+                    let session = LanguageModelSession(model: ParityModel.make())
+                    for round in 0..<2 {
+                        let response = try await session.respond(
+                            to: "Reply with the single word: ok (worker \(worker), round \(round))",
+                            options: deterministic
+                        )
+                        #expect(!response.content.isEmpty)
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
     @Test("respond(to:) returns non-empty content and records prompt + response in the transcript")
     func plainTextResponse() async throws {
         let session = LanguageModelSession(model: ParityModel.make())
@@ -791,6 +813,21 @@ struct DifferentialParityScenarios {
         ])
     }
 
+    @Test("abandoning a stream stops generation and settles the session")
+    func streamAbandonmentCancels() async throws {
+        let session = LanguageModelSession(
+            model: ParityMockModel(events: [.slowFragments(["a", "b", "c", "d", "e", "f"])])
+        )
+        var sawSnapshot = false
+        for try await _ in session.streamResponse(to: "hi") {
+            sawSnapshot = true
+            break  // abandon the stream mid-generation
+        }
+        #expect(sawSnapshot)
+        try await Task.sleep(for: .seconds(2))
+        #expect(session.isResponding == false, "generation must not keep running after the consumer leaves")
+    }
+
     @Test("scripted streaming yields the identical cumulative snapshot sequence")
     func scriptedStreaming() async throws {
         let session = LanguageModelSession(
@@ -826,6 +863,7 @@ struct ParityMockModel: LanguageModel {
     enum Event: Hashable {
         case text(String)
         case fragments([String])
+        case slowFragments([String])
         case toolCall(name: String, arguments: String)
     }
 
@@ -875,6 +913,11 @@ struct ParityMockModel: LanguageModel {
             case .fragments(let fragments):
                 for fragment in fragments {
                     await channel.send(.response(action: .appendText(fragment, tokenCount: 1)))
+                }
+            case .slowFragments(let fragments):
+                for fragment in fragments {
+                    await channel.send(.response(action: .appendText(fragment, tokenCount: 1)))
+                    try await Task.sleep(for: .milliseconds(150))
                 }
             case .toolCall(let name, let arguments):
                 await channel.send(.toolCalls(action: .toolCall(

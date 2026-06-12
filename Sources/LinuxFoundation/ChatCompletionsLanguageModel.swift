@@ -22,16 +22,21 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// Whether the endpoint supports `response_format` for structured output.
     public var supportsGuidedGeneration: Bool
 
+    /// Per-request timeout, in seconds.
+    public var timeout: TimeInterval
+
     public init(
         name: String,
         url: URL,
         additionalHeaders: [String: String] = [:],
-        supportsGuidedGeneration: Bool = true
+        supportsGuidedGeneration: Bool = true,
+        timeout: TimeInterval = 600
     ) {
         self.name = name
         self.url = url
         self.additionalHeaders = additionalHeaders
         self.supportsGuidedGeneration = supportsGuidedGeneration
+        self.timeout = timeout
     }
 
     public var capabilities: LanguageModelCapabilities {
@@ -46,7 +51,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             modelName: name,
             url: url,
             additionalHeaders: additionalHeaders,
-            supportsGuidedGeneration: supportsGuidedGeneration
+            supportsGuidedGeneration: supportsGuidedGeneration,
+            timeout: timeout
         )
     }
 
@@ -58,6 +64,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             var url: URL
             var additionalHeaders: [String: String]
             var supportsGuidedGeneration: Bool
+            var timeout: TimeInterval = 600
         }
 
         let configuration: Configuration
@@ -81,7 +88,20 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     if body.count > 4096 { break }
                 }
                 if response.statusCode == 429 {
-                    throw LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: body))
+                    let resetDate = response.value(forHTTPHeaderField: "Retry-After")
+                        .flatMap(Double.init)
+                        .map { Date(timeIntervalSinceNow: $0) }
+                    throw LanguageModelError.rateLimited(.init(resetDate: resetDate, debugDescription: body))
+                }
+                // Providers report context overflow as a 400/413 mentioning
+                // the context/token limit; surface it as the typed error.
+                let lowered = body.lowercased()
+                if [400, 413].contains(response.statusCode),
+                    lowered.contains("context") || lowered.contains("maximum length"),
+                    lowered.contains("token") || lowered.contains("length") || lowered.contains("window") {
+                    throw LanguageModelError.contextSizeExceeded(.init(
+                        contextSize: 0, tokenCount: 0, debugDescription: body
+                    ))
                 }
                 throw LanguageModelTransportError(statusCode: response.statusCode, message: body)
             }
@@ -153,6 +173,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
         func makeURLRequest(for request: LanguageModelExecutorGenerationRequest) throws -> URLRequest {
             var urlRequest = URLRequest(url: endpoint)
+            urlRequest.timeoutInterval = configuration.timeout
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -301,7 +322,9 @@ extension JSONNode {
 /// Linux corelibs lacks it, so a data-delegate feeds an AsyncThrowingStream.
 enum HTTPLineStream {
     static func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
-        #if canImport(Darwin)
+        #if AsyncHTTPClient
+        return try await connectViaAsyncHTTPClient(request)
+        #elseif canImport(Darwin)
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw LanguageModelTransportError(statusCode: 0, message: "non-HTTP response")
@@ -320,30 +343,86 @@ enum HTTPLineStream {
         continuation.onTermination = { _ in task.cancel() }
         return (stream, http)
         #else
-        let delegate = LineStreamDelegate()
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        session.dataTask(with: request).resume()
-        let response = try await delegate.response()
-        return (delegate.lines, response)
+        return try await LinuxSSESession.shared.connect(request)
         #endif
     }
 }
 
 #if !canImport(Darwin)
-private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// One shared URLSession for all SSE requests; the router delegate fans
+/// events out to per-task line streams. (Per-request URLSession instances
+/// churn file descriptors and worker threads under production load.)
+final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    static let shared = LinuxSSESession()
+
+    private let lock = NSLock()
+    private var handlers: [Int: LineStreamDelegate] = [:]
+    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+
+    func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
+        let (handler, task) = register(request)
+        task.resume()
+        let response = try await handler.response()
+        return (handler.lines, response)
+    }
+
+    private func register(_ request: URLRequest) -> (LineStreamDelegate, URLSessionDataTask) {
+        let handler = LineStreamDelegate()
+        let task = session.dataTask(with: request)
+        lock.lock()
+        handlers[task.taskIdentifier] = handler
+        lock.unlock()
+        handler.onTerminate = { [weak task] in task?.cancel() }
+        return (handler, task)
+    }
+
+    private func handler(for task: URLSessionTask) -> LineStreamDelegate? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers[task.taskIdentifier]
+    }
+
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        handler(for: dataTask)?.receive(response: response)
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        handler(for: dataTask)?.receive(data: data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        let finished = handler(for: task)
+        lock.lock()
+        handlers.removeValue(forKey: task.taskIdentifier)
+        lock.unlock()
+        finished?.complete(error: error)
+    }
+}
+#endif
+
+#if !canImport(Darwin)
+final class LineStreamDelegate: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = Data()
     private var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
     private var storedResponse: HTTPURLResponse?
     private var finishedEarly: (any Error)??
 
+    var onTerminate: (@Sendable () -> Void)?
+
     let lines: AsyncThrowingStream<String, any Error>
     private let lineContinuation: AsyncThrowingStream<String, any Error>.Continuation
 
-    override init() {
+    init() {
         (lines, lineContinuation) = AsyncThrowingStream.makeStream()
-        super.init()
+        lineContinuation.onTermination = { [self] reason in
+            if case .cancelled = reason { onTerminate?() }
+        }
     }
 
     func response() async throws -> HTTPURLResponse {
@@ -364,11 +443,7 @@ private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unche
         }
     }
 
-    func urlSession(
-        _ session: URLSession, dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
+    func receive(response: URLResponse) {
         lock.lock()
         storedResponse = response as? HTTPURLResponse
         let continuation = responseContinuation
@@ -377,10 +452,9 @@ private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unche
         if let continuation, let http = response as? HTTPURLResponse {
             continuation.resume(returning: http)
         }
-        completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    func receive(data: Data) {
         lock.lock()
         buffer.append(data)
         var emitted: [String] = []
@@ -396,7 +470,7 @@ private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unche
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+    func complete(error: (any Error)?) {
         lock.lock()
         if !buffer.isEmpty {
             let trailing = String(decoding: buffer, as: UTF8.self)
@@ -417,6 +491,65 @@ private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unche
         } else {
             lineContinuation.finish()
         }
+    }
+}
+#endif
+
+
+#if AsyncHTTPClient
+import AsyncHTTPClient
+import NIOCore
+
+extension HTTPLineStream {
+    /// NIO-based transport: pooled connections, concurrent-safe streaming.
+    static func connectViaAsyncHTTPClient(
+        _ request: URLRequest
+    ) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
+        guard let url = request.url else {
+            throw LanguageModelTransportError(statusCode: 0, message: "request has no URL")
+        }
+        var httpRequest = HTTPClientRequest(url: url.absoluteString)
+        httpRequest.method = .RAW(value: request.httpMethod ?? "GET")
+        for (header, value) in request.allHTTPHeaderFields ?? [:] {
+            httpRequest.headers.add(name: header, value: value)
+        }
+        if let body = request.httpBody {
+            httpRequest.body = .bytes(ByteBuffer(bytes: body))
+        }
+
+        let response = try await HTTPClient.shared.execute(httpRequest, timeout: .seconds(Int64(request.timeoutInterval)))
+        guard let httpResponse = HTTPURLResponse(
+            url: url, statusCode: Int(response.status.code), httpVersion: nil,
+            headerFields: Dictionary(response.headers.map { ($0.name, $0.value) }, uniquingKeysWith: { first, _ in first })
+        ) else {
+            throw LanguageModelTransportError(statusCode: 0, message: "could not form response")
+        }
+
+        let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
+        let pump = Task {
+            var buffer = Data()
+            do {
+                for try await chunk in response.body {
+                    buffer.append(contentsOf: chunk.readableBytesView)
+                    while let newline = buffer.firstIndex(of: 0x0A) {
+                        let lineData = buffer[buffer.startIndex..<newline]
+                        buffer.removeSubrange(buffer.startIndex...newline)
+                        continuation.yield(String(decoding: lineData, as: UTF8.self)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                    }
+                }
+                if !buffer.isEmpty {
+                    continuation.yield(String(decoding: buffer, as: UTF8.self))
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { reason in
+            if case .cancelled = reason { pump.cancel() }
+        }
+        return (stream, httpResponse)
     }
 }
 #endif

@@ -11,13 +11,27 @@ let package = Package(
     products: [
         .library(name: "LinuxFoundation", targets: ["LinuxFoundation"])
     ],
+    traits: [
+        // NIO-based HTTP transport for production Linux streaming
+        // (connection pooling; avoids corelibs URLSession concurrency bugs).
+        .trait(name: "AsyncHTTPClient"),
+        .default(enabledTraits: []),
+    ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0")
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
     ],
     targets: [
         .target(
             name: "LinuxFoundation",
-            dependencies: ["LinuxFoundationMacros"]
+            dependencies: [
+                "LinuxFoundationMacros",
+                .product(
+                    name: "AsyncHTTPClient",
+                    package: "async-http-client",
+                    condition: .when(traits: ["AsyncHTTPClient"])
+                ),
+            ]
         ),
         .macro(
             name: "LinuxFoundationMacros",
