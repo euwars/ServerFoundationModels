@@ -12,7 +12,23 @@ public final class LanguageModelSession: @unchecked Sendable {
     private var _transcript: Transcript
     private var _isResponding = false
     private var _usage = Usage()
-    var errorPolicy: TranscriptErrorHandlingPolicy?
+    private var _errorPolicy: TranscriptErrorHandlingPolicy?
+
+    var errorPolicy: TranscriptErrorHandlingPolicy? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _errorPolicy
+        }
+        set {
+            lock.lock()
+            _errorPolicy = newValue
+            lock.unlock()
+        }
+    }
+
+    /// Hard cap on executor rounds per turn; only runaway tool loops hit it.
+    static let maximumToolRounds = 64
 
     private let tools: [ErasedTool]
     private let toolDefinitions: [Transcript.ToolDefinition]
@@ -158,7 +174,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         self.properties.rootDynamicInstructions = erased
         self.profileResolver = {
             var resolved = ResolvedProfile()
-            let text = erased.allInstructionTexts.joined()
+            let text = erased.allInstructionTexts.joined(separator: "\n")
             resolved.instructionsText = text.isEmpty ? nil : text
             return resolved
         }
@@ -181,15 +197,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         transcript: Transcript?
     ) {
         // One executor per unique configuration, created lazily and reused —
-        // matching the framework's documented caching contract.
-        let configuration = model.executorConfiguration
-        let cache = ExecutorCache<Model.Executor>()
-        self.perform = { request, channel in
-            let executor = try cache.executor {
-                try Model.Executor(configuration: configuration)
-            }
-            try await executor.respond(to: request, model: model, streamingInto: channel)
-        }
+        // matching the framework's documented caching contract. The registry
+        // is shared process-wide so re-evaluated profiles and multiple
+        // sessions never construct duplicate executors for one configuration.
+        self.perform = erasePerform(model)
 
         self.tools = tools.map { ErasedTool($0) }
         self.toolDefinitions = self.tools.map {
@@ -240,26 +251,24 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions: ContextOptions = ContextOptions(),
         metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) async throws -> Response<String> {
-        try await withRespondingFlag {
-            let preCount = transcript.count
-            appendEntry(.prompt(Transcript.Prompt(
-                segments: [.text(.init(content: prompt))],
-                options: options
-            )))
-
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options
+        ))
+        return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
                 schema: nil, options: options,
                 contextOptions: contextOptions, metadata: metadata,
                 onCumulativeText: nil
             )
 
-            let responseEntry = Transcript.Response(segments: [.text(.init(content: result.text))])
+            let responseEntry = Transcript.Response(segments: [.text(.init(content: result.finalRoundText))])
             appendEntry(.response(responseEntry))
             try await notifyResponse(responseEntry)
             return Response(
                 content: result.text,
                 rawContent: result.text.generatedContent,
-                transcriptEntries: transcript.allEntries[preCount...],
+                transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
                 usage: result.usage
             )
         }
@@ -301,28 +310,30 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions: ContextOptions,
         metadata: [String: any Sendable & Codable & Equatable]
     ) async throws -> Response<GeneratedContent> {
-        try await withRespondingFlag {
-            let preCount = transcript.count
-            appendEntry(.prompt(Transcript.Prompt(
-                segments: [.text(.init(content: prompt))],
-                options: options,
-                responseFormat: Transcript.ResponseFormat(schema: schema)
-            )))
-
+        var contextOptions = contextOptions
+        contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options,
+            responseFormat: Transcript.ResponseFormat(schema: schema)
+        ))
+        return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
                 schema: schema, options: options,
                 contextOptions: contextOptions, metadata: metadata,
                 onCumulativeText: nil
             )
-            let content = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
+            let content = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
 
-            appendEntry(.response(Transcript.Response(
+            let responseEntry = Transcript.Response(
                 segments: [.structure(.init(content: content))]
-            )))
+            )
+            appendEntry(.response(responseEntry))
+            try await notifyResponse(responseEntry)
             return Response(
                 content: content,
                 rawContent: content,
-                transcriptEntries: transcript.allEntries[preCount...],
+                transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
                 usage: result.usage
             )
         }
@@ -350,7 +361,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         options: GenerationOptions = GenerationOptions()
     ) async throws -> Response<Content> where Content: Generable {
         try await respondTyped(
-            to: prompt, generating: type,
+            to: prompt, generating: type, includeSchemaInPrompt: includeSchemaInPrompt,
             options: options, contextOptions: ContextOptions(), metadata: [:]
         )
     }
@@ -358,19 +369,20 @@ public final class LanguageModelSession: @unchecked Sendable {
     private func respondTyped<Content>(
         to prompt: String,
         generating type: Content.Type,
+        includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
         metadata: [String: any Sendable & Codable & Equatable]
     ) async throws -> Response<Content> where Content: Generable {
-        try await withRespondingFlag {
-            let preCount = transcript.count
-            let schema = Content.generationSchema
-            appendEntry(.prompt(Transcript.Prompt(
-                segments: [.text(.init(content: prompt))],
-                options: options,
-                responseFormat: Transcript.ResponseFormat(schema: schema)
-            )))
-
+        var contextOptions = contextOptions
+        contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
+        let schema = Content.generationSchema
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options,
+            responseFormat: Transcript.ResponseFormat(schema: schema)
+        ))
+        return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
                 schema: schema, options: options,
                 contextOptions: contextOptions, metadata: metadata,
@@ -379,21 +391,23 @@ public final class LanguageModelSession: @unchecked Sendable {
             let raw: GeneratedContent
             let content: Content
             do {
-                raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
+                raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
                 content = try Content(raw)
             } catch {
                 throw GenerationError.decodingFailure(.init(
-                    debugDescription: "failed to decode \(Content.self) from response (\(error)); response text: '\(result.text.prefix(2000))'"
+                    debugDescription: "failed to decode \(Content.self) from response (\(error)); response text: '\(result.finalRoundText.prefix(2000))'"
                 ))
             }
 
-            appendEntry(.response(Transcript.Response(
+            let responseEntry = Transcript.Response(
                 segments: [.structure(.init(content: raw))]
-            )))
+            )
+            appendEntry(.response(responseEntry))
+            try await notifyResponse(responseEntry)
             return Response(
                 content: content,
                 rawContent: raw,
-                transcriptEntries: transcript.allEntries[preCount...],
+                transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
                 usage: result.usage
             )
         }
@@ -407,31 +421,42 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions: ContextOptions = ContextOptions(),
         metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> ResponseStream<String> {
-        let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>.makeStream()
+        // Snapshots are cumulative, so coalescing to the newest one is safe
+        // and bounds buffering for slow consumers (each snapshot carries the
+        // full content so far). The terminal snapshot is always the last
+        // element buffered before finish, so `collect()` still observes it.
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options
+        ))
 
         let generation = Task {
             do {
-                setResponding(true)
-                appendEntry(.prompt(Transcript.Prompt(
-                    segments: [.text(.init(content: prompt))],
-                    options: options
-                )))
+                try await withTurn(appending: promptEntry) { preCount in
+                    let result = try await generateLoop(
+                        schema: nil, options: options,
+                        contextOptions: contextOptions, metadata: metadata
+                    ) { cumulative, _ in
+                        continuation.yield(ResponseStream<String>.Snapshot(
+                            content: cumulative,
+                            rawContent: cumulative.generatedContent
+                        ))
+                    }
 
-                let result = try await generateLoop(
-                    schema: nil, options: options,
-                    contextOptions: contextOptions, metadata: metadata
-                ) { cumulative in
+                    let responseEntry = Transcript.Response(segments: [.text(.init(content: result.finalRoundText))])
+                    appendEntry(.response(responseEntry))
+                    try await notifyResponse(responseEntry)
                     continuation.yield(ResponseStream<String>.Snapshot(
-                        content: cumulative,
-                        rawContent: cumulative.generatedContent
+                        content: result.text,
+                        rawContent: result.text.generatedContent,
+                        transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
+                        usage: result.usage
                     ))
                 }
-
-                appendEntry(.response(Transcript.Response(segments: [.text(.init(content: result.text))])))
-                setResponding(false)
                 continuation.finish()
             } catch {
-                setResponding(false)
                 continuation.finish(throwing: error)
             }
         }
@@ -460,65 +485,73 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
     ) -> ResponseStream<Content> where Content: Generable {
-        streamTyped(to: prompt, generating: type, options: options, contextOptions: ContextOptions(), metadata: [:])
+        streamTyped(
+            to: prompt, generating: type, includeSchemaInPrompt: includeSchemaInPrompt,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
     }
 
     private func streamTyped<Content>(
         to prompt: String,
         generating type: Content.Type,
+        includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
         metadata: [String: any Sendable & Codable & Equatable]
     ) -> ResponseStream<Content> where Content: Generable {
-        let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>.makeStream()
+        // Coalescable cumulative snapshots: see the plain streaming path.
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
+        var contextOptions = contextOptions
+        contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
+        let effectiveContextOptions = contextOptions
+        let schema = Content.generationSchema
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options,
+            responseFormat: Transcript.ResponseFormat(schema: schema)
+        ))
 
         let generation = Task {
             do {
-                setResponding(true)
-                let preCount = transcript.count
-                let schema = Content.generationSchema
-                appendEntry(.prompt(Transcript.Prompt(
-                    segments: [.text(.init(content: prompt))],
-                    options: options,
-                    responseFormat: Transcript.ResponseFormat(schema: schema)
-                )))
+                try await withTurn(appending: promptEntry) { preCount in
+                    let result = try await generateLoop(
+                        schema: schema, options: options,
+                        contextOptions: effectiveContextOptions, metadata: metadata
+                    ) { _, roundText in
+                        guard let partialRaw = GeneratedContent.partial(json: Self.stripCodeFences(from: roundText)),
+                            let partial = try? Content.PartiallyGenerated(partialRaw)
+                        else { return }
+                        continuation.yield(ResponseStream<Content>.Snapshot(
+                            content: partial,
+                            rawContent: partialRaw
+                        ))
+                    }
 
-                let result = try await generateLoop(
-                    schema: schema, options: options,
-                    contextOptions: contextOptions, metadata: metadata
-                ) { cumulative in
-                    guard let partialRaw = GeneratedContent.partial(json: Self.stripCodeFences(from: cumulative)),
-                        let partial = try? Content.PartiallyGenerated(partialRaw)
-                    else { return }
+                    let raw: GeneratedContent
+                    let final: Content.PartiallyGenerated
+                    do {
+                        raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+                        final = try Content.PartiallyGenerated(raw)
+                    } catch {
+                        throw GenerationError.decodingFailure(.init(
+                            debugDescription: "failed to decode \(Content.self) from streamed response (\(error))"
+                        ))
+                    }
+                    let responseEntry = Transcript.Response(
+                        segments: [.structure(.init(content: raw))]
+                    )
+                    appendEntry(.response(responseEntry))
+                    try await notifyResponse(responseEntry)
                     continuation.yield(ResponseStream<Content>.Snapshot(
-                        content: partial,
-                        rawContent: partialRaw
+                        content: final,
+                        rawContent: raw,
+                        transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
+                        usage: result.usage
                     ))
                 }
-
-                let raw: GeneratedContent
-                let final: Content.PartiallyGenerated
-                do {
-                    raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
-                    final = try Content.PartiallyGenerated(raw)
-                } catch {
-                    throw GenerationError.decodingFailure(.init(
-                        debugDescription: "failed to decode \(Content.self) from streamed response (\(error))"
-                    ))
-                }
-                appendEntry(.response(Transcript.Response(
-                    segments: [.structure(.init(content: raw))]
-                )))
-                continuation.yield(ResponseStream<Content>.Snapshot(
-                    content: final,
-                    rawContent: raw,
-                    transcriptEntries: transcript.allEntries[preCount...],
-                    usage: result.usage
-                ))
-                setResponding(false)
                 continuation.finish()
             } catch {
-                setResponding(false)
                 continuation.finish(throwing: error)
             }
         }
@@ -622,7 +655,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
     ) -> ResponseStream<GeneratedContent> {
-        streamStructured(to: prompt, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+        streamStructured(
+            to: prompt, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
     }
 
     public func streamResponse(
@@ -641,7 +677,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool = true,
         options: GenerationOptions = GenerationOptions()
     ) -> ResponseStream<GeneratedContent> {
-        streamStructured(to: prompt.text, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+        streamStructured(
+            to: prompt.text, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
     }
 
     public func streamResponse(
@@ -660,7 +699,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         options: GenerationOptions = GenerationOptions(),
         @PromptBuilder prompt: () throws -> Prompt
     ) rethrows -> ResponseStream<GeneratedContent> {
-        streamStructured(to: try prompt().text, schema: schema, options: options, contextOptions: ContextOptions(), metadata: [:])
+        streamStructured(
+            to: try prompt().text, schema: schema, includeSchemaInPrompt: includeSchemaInPrompt,
+            options: options, contextOptions: ContextOptions(), metadata: [:]
+        )
     }
 
     public func streamResponse(
@@ -677,41 +719,47 @@ public final class LanguageModelSession: @unchecked Sendable {
     private func streamStructured(
         to prompt: String,
         schema: GenerationSchema,
+        includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
         metadata: [String: any Sendable & Codable & Equatable]
     ) -> ResponseStream<GeneratedContent> {
-        let (stream, continuation) = AsyncThrowingStream<ResponseStream<GeneratedContent>.Snapshot, any Swift.Error>.makeStream()
+        // Coalescable cumulative snapshots: see the plain streaming path.
+        let (stream, continuation) = AsyncThrowingStream<ResponseStream<GeneratedContent>.Snapshot, any Swift.Error>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
+        var contextOptions = contextOptions
+        contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
+        let effectiveContextOptions = contextOptions
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            segments: [.text(.init(content: prompt))],
+            options: options,
+            responseFormat: Transcript.ResponseFormat(schema: schema)
+        ))
         let generation = Task {
             do {
-                setResponding(true)
-                let preCount = transcript.count
-                appendEntry(.prompt(Transcript.Prompt(
-                    segments: [.text(.init(content: prompt))],
-                    options: options,
-                    responseFormat: Transcript.ResponseFormat(schema: schema)
-                )))
-                let result = try await generateLoop(
-                    schema: schema, options: options,
-                    contextOptions: contextOptions, metadata: metadata
-                ) { cumulative in
-                    if let partial = GeneratedContent.partial(json: Self.stripCodeFences(from: cumulative)) {
-                        continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
-                            content: partial, rawContent: partial
-                        ))
+                try await withTurn(appending: promptEntry) { preCount in
+                    let result = try await generateLoop(
+                        schema: schema, options: options,
+                        contextOptions: effectiveContextOptions, metadata: metadata
+                    ) { _, roundText in
+                        if let partial = GeneratedContent.partial(json: Self.stripCodeFences(from: roundText)) {
+                            continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
+                                content: partial, rawContent: partial
+                            ))
+                        }
                     }
+                    let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+                    let responseEntry = Transcript.Response(segments: [.structure(.init(content: raw))])
+                    appendEntry(.response(responseEntry))
+                    try await notifyResponse(responseEntry)
+                    continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
+                        content: raw, rawContent: raw,
+                        transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
+                        usage: result.usage
+                    ))
                 }
-                let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.text))
-                appendEntry(.response(Transcript.Response(segments: [.structure(.init(content: raw))])))
-                continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
-                    content: raw, rawContent: raw,
-                    transcriptEntries: transcript.allEntries[preCount...],
-                    usage: result.usage
-                ))
-                setResponding(false)
                 continuation.finish()
             } catch {
-                setResponding(false)
                 continuation.finish(throwing: error)
             }
         }
@@ -799,7 +847,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions: ContextOptions = ContextOptions(),
         metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> ResponseStream<String> {
-        streamResponse(to: prompt.text, options: options)
+        streamResponse(to: prompt.text, options: options, contextOptions: contextOptions, metadata: metadata)
     }
 
     public func streamResponse(
@@ -814,14 +862,20 @@ public final class LanguageModelSession: @unchecked Sendable {
     /// Runs executor requests until the model produces a final response,
     /// executing tool calls between rounds and recording them in the transcript.
     struct LoopResult {
+        /// Text across all rounds of the turn (tool-call preambles included),
+        /// joined with newlines.
         var text: String
+        /// Text of the final round only — what structured paths decode.
+        var finalRoundText: String
         var usage: Usage
     }
 
     /// Resolves the dynamic profile for a new prompt, persisting its history
     /// transform and refreshed instructions entry into the stored transcript —
     /// matching the framework: the transcript IS the post-profile state.
-    private func prepareTurn(options: GenerationOptions, firstRound: Bool = true) async throws -> (ResolvedProfile?, GenerationOptions) {
+    /// The returned transcript is what the request must send: it additionally
+    /// has the profile's input filter applied, which is never persisted.
+    private func prepareTurn(options: GenerationOptions, firstRound: Bool = true) async throws -> (ResolvedProfile?, GenerationOptions, Transcript) {
         var allEntries = transcript.allEntries
         let instructionEntries = allEntries.filter { if case .instructions = $0 { return true }; return false }
         allEntries.removeAll { if case .instructions = $0 { return true }; return false }
@@ -830,7 +884,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         // the session's `history` property during resolution; the session
         // adopts whatever they leave behind.
         properties.history = allEntries[...]
-        guard let profileResolver else { return (nil, options) }
+        guard let profileResolver else { return (nil, options, transcript) }
         let resolved = SessionPropertyValues.$current.withValue(properties) { profileResolver() }
 
         // onPrompt callbacks run with the session's properties bound so
@@ -869,6 +923,29 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
         replaceTranscript(Transcript(entries: entries))
 
+        // The input filter shapes only the transcript copy sent with this
+        // request — unlike the history transform, it is never persisted.
+        var requestEntries = entries
+        if let filter = resolved.inputFilter {
+            let requestInstructions = requestEntries.filter {
+                if case .instructions = $0 { return true }; return false
+            }
+            var filtered = requestEntries.filter {
+                if case .instructions = $0 { return false }; return true
+            }
+            filtered = filter(filtered)
+            switch filtered.last {
+            case .prompt, .toolOutput:
+                break
+            default:
+                throw LanguageModelTransportError(
+                    statusCode: 0,
+                    message: "Transcript must end with a .prompt or .toolOutput entry."
+                )
+            }
+            requestEntries = requestInstructions + filtered
+        }
+
         var effectiveOptions = options
         if effectiveOptions.temperature == nil { effectiveOptions.temperature = resolved.temperature }
         if effectiveOptions.samplingMode == nil { effectiveOptions.samplingMode = resolved.samplingMode }
@@ -881,7 +958,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         if let policy = resolved.transcriptErrorHandlingPolicy {
             errorPolicy = policy
         }
-        return (resolved, effectiveOptions)
+        return (resolved, effectiveOptions, Transcript(entries: requestEntries))
     }
 
     private func generateLoop(
@@ -889,16 +966,34 @@ public final class LanguageModelSession: @unchecked Sendable {
         options: GenerationOptions,
         contextOptions: ContextOptions = ContextOptions(),
         metadata: [String: any Sendable & Codable & Equatable] = [:],
-        onCumulativeText: (@Sendable (String) -> Void)?
+        onCumulativeText: (@Sendable (_ cumulativeText: String, _ roundText: String) -> Void)?
     ) async throws -> LoopResult {
         var turnUsage = Usage()
         var firstRound = true
+        // Text from earlier rounds of this turn (tool-call preambles); the
+        // cumulative stream is `completedRoundsText` + the current round's
+        // text so streamed snapshots never regress when a new round starts.
+        var completedRoundsText = ""
+        var rounds = 0
+
+        func joinedRounds(_ earlier: String, _ current: String) -> String {
+            if earlier.isEmpty { return current }
+            if current.isEmpty { return earlier }
+            return earlier + "\n" + current
+        }
 
         while true {
+            rounds += 1
+            if rounds > Self.maximumToolRounds {
+                throw LanguageModelTransportError(
+                    statusCode: 0,
+                    message: "the tool-call loop exceeded \(Self.maximumToolRounds) rounds without producing a final response"
+                )
+            }
             // The profile is dynamic: it re-resolves before every round, so a
             // tool that changes state mid-loop (e.g. activating a skill)
             // refreshes the instructions for the continuation request.
-            let (resolved, effectiveOptions) = try await prepareTurn(options: options, firstRound: firstRound)
+            let (resolved, effectiveOptions, requestTranscript) = try await prepareTurn(options: options, firstRound: firstRound)
             firstRound = false
             let activeTools = tools + (resolved?.tools ?? [])
             let activeToolDefinitions = activeTools.map {
@@ -907,7 +1002,7 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             let channel = LanguageModelExecutorGenerationChannel()
             var request = LanguageModelExecutorGenerationRequest(
-                transcript: transcript,
+                transcript: requestTranscript,
                 enabledTools: activeToolDefinitions,
                 schema: schema,
                 generationOptions: effectiveOptions
@@ -951,10 +1046,10 @@ public final class LanguageModelSession: @unchecked Sendable {
                     switch response.action {
                     case .appendText(let fragment):
                         text += fragment.content
-                        onCumulativeText?(text)
+                        onCumulativeText?(joinedRounds(completedRoundsText, text), text)
                     case .replaceTextSegment(let replacement):
                         text = replacement.content
-                        onCumulativeText?(text)
+                        onCumulativeText?(joinedRounds(completedRoundsText, text), text)
                     case .updateUsage(let reported):
                         accumulate(reported)
                     case .updateCustomSegment, .addAttachmentSegment, .removeAttachmentSegment, .updateMetadata:
@@ -1049,7 +1144,20 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             if toolCalls.isEmpty {
-                return LoopResult(text: text, usage: turnUsage)
+                return LoopResult(
+                    text: joinedRounds(completedRoundsText, text),
+                    finalRoundText: text,
+                    usage: turnUsage
+                )
+            }
+
+            // Assistant text that preceded the tool calls is part of the
+            // durable record: persist it ahead of the calls it led to.
+            if !text.isEmpty {
+                appendEntry(.response(Transcript.Response(
+                    segments: [.text(.init(content: text))]
+                )))
+                completedRoundsText = joinedRounds(completedRoundsText, text)
             }
 
             let transcriptCalls = try toolCalls.map { call in
@@ -1130,19 +1238,43 @@ public final class LanguageModelSession: @unchecked Sendable {
         _isResponding = true
     }
 
-    private func withRespondingFlag<T>(_ body: () async throws -> T) async throws -> T {
+    /// Runs one turn under the responding gate: acquires the gate (throwing
+    /// `GenerationError.concurrentRequests` without touching any other
+    /// request's state if it is already held), appends the prompt entry, and
+    /// releases the gate exactly once. On failure the `.revertTranscript`
+    /// policy removes the appended prompt entry and everything after it —
+    /// located by identity, since history transforms may have changed the
+    /// entry count arbitrarily.
+    private func withTurn<T>(
+        appending promptEntry: Transcript.Entry,
+        _ body: (_ preCount: Int) async throws -> T
+    ) async throws -> T {
         try beginResponding()
+        // Registered only after the gate is acquired: a rejected concurrent
+        // request can never clear the in-flight request's flag.
         defer { setResponding(false) }
 
         let preCount = transcript.count
+        appendEntry(promptEntry)
         do {
-            return try await body()
+            return try await body(preCount)
         } catch {
             if transcriptErrorHandlingPolicy == .revertTranscript {
-                truncateTranscript(to: preCount)
+                revertTranscript(removingFrom: promptEntry.id)
             }
             throw error
         }
+    }
+
+    /// The entries this turn contributed: the recorded prompt entry and
+    /// everything after it. Falls back to a clamped suffix when a history
+    /// transform replaced the prompt entry itself.
+    private func turnEntries(from promptEntryID: String, fallbackPreCount: Int) -> ArraySlice<Transcript.Entry> {
+        let entries = transcript.allEntries
+        if let index = entries.firstIndex(where: { $0.id == promptEntryID }) {
+            return entries[index...]
+        }
+        return entries[min(fallbackPreCount, entries.count)...]
     }
 
     private func replaceTranscript(_ transcript: Transcript) {
@@ -1151,9 +1283,14 @@ public final class LanguageModelSession: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func truncateTranscript(to count: Int) {
+    /// Removes the entry with the given id and everything after it. A no-op
+    /// when the entry is no longer present (e.g. a history transform already
+    /// dropped it) — never truncates unrelated entries by position.
+    private func revertTranscript(removingFrom entryID: String) {
         lock.lock()
-        _transcript = Transcript(entries: _transcript.allEntries.prefix(count))
+        if let index = _transcript.allEntries.firstIndex(where: { $0.id == entryID }) {
+            _transcript = Transcript(entries: _transcript.allEntries.prefix(index))
+        }
         lock.unlock()
     }
 
@@ -1269,16 +1406,31 @@ public final class LanguageModelSession: @unchecked Sendable {
 
 // MARK: - Executor caching
 
-final class ExecutorCache<Executor>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cached: Executor?
+/// Process-wide executor cache: one executor per (executor type,
+/// configuration) pair, however many sessions or re-evaluated profile bodies
+/// ask for it — `.model(...)` inside a dynamic profile must not construct a
+/// new executor (and e.g. a new HTTP connection pool) on every request.
+final class SharedExecutorRegistry: @unchecked Sendable {
+    static let shared = SharedExecutorRegistry()
 
-    func executor(_ make: () throws -> Executor) throws -> Executor {
+    private struct Key: Hashable {
+        let executorType: ObjectIdentifier
+        let configuration: AnyHashable
+    }
+
+    private let lock = NSLock()
+    private var executors: [Key: Any] = [:]
+
+    func executor<Executor: LanguageModelExecutor>(
+        for configuration: Executor.Configuration,
+        as type: Executor.Type
+    ) throws -> Executor {
+        let key = Key(executorType: ObjectIdentifier(Executor.self), configuration: AnyHashable(configuration))
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
-        let executor = try make()
-        cached = executor
+        if let cached = executors[key] as? Executor { return cached }
+        let executor = try Executor(configuration: configuration)
+        executors[key] = executor
         return executor
     }
 }

@@ -12,9 +12,17 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
     private let continuation: AsyncStream<any Event>.Continuation
 
     public init() {
+        // Deliberately unbounded: executor events are incremental edits
+        // (deltas), not coalescable snapshots — dropping any would corrupt
+        // the assembled response. The session drains this stream eagerly in
+        // its generation loop, so buffering stays proportional to one round.
+        // (Session-facing snapshot streams, by contrast, buffer only the
+        // newest snapshot, since each snapshot carries the full content.)
         (stream, continuation) = AsyncStream.makeStream()
     }
 
+    /// Enqueues the event. `async` for API parity only — the channel is
+    /// unbounded, so this never suspends and applies no backpressure.
     public func send(_ event: some Event) async {
         continuation.yield(event)
     }
