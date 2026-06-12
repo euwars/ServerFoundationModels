@@ -142,8 +142,46 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
     }
 
     public struct QuotaUsage: Sendable {
-        public struct LimitIncreaseSuggestion: Sendable {}
+        public var status: Status
+        public var limitIncreaseSuggestion: LimitIncreaseSuggestion?
+        public var resetDate: Date?
+
+        public var isLimitReached: Bool {
+            if case .limitReached = status { return true }
+            return false
+        }
+
+        public enum Status: Sendable {
+            case belowLimit(BelowLimit)
+            case limitReached(LimitReached)
+
+            public struct BelowLimit: Sendable {
+                public var isApproachingLimit: Bool
+            }
+
+            public struct LimitReached: Sendable {}
+        }
+
+        public struct LimitIncreaseSuggestion: Sendable {
+            public func show() {}
+        }
     }
+
+    /// Quota state for Private Cloud Compute. Without the entitlement (and on
+    /// Linux) the model is unavailable, reported as a reached limit.
+    public var quotaUsage: QuotaUsage {
+        QuotaUsage(status: .limitReached(.init()), limitIncreaseSuggestion: nil, resetDate: nil)
+    }
+
+    public var isAvailable: Bool {
+        availability == .available
+    }
+
+    public var contextSize: Int { 0 }
+
+    public var supportedLanguages: Set<Locale.Language> { [] }
+
+    public func supportsLocale(_ locale: Locale = Locale.current) -> Bool { false }
 
     public struct Executor: LanguageModelExecutor {
         public struct Configuration: Hashable, Sendable {

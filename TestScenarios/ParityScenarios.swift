@@ -325,6 +325,27 @@ struct BehaviorParityScenarios {
         }
     }
 
+    @Test("SystemLanguageModel reports model facts: context size, languages, token counts")
+    func systemModelFacts() async throws {
+        let model = SystemLanguageModel.default
+        #expect(model.contextSize > 0)
+        #expect(!model.supportedLanguages.isEmpty)
+        #expect(model.supportsLocale(Locale(identifier: "en_US")))
+        let tokens = try await model.tokenCount(for: "The quick brown fox jumps over the lazy dog.")
+        #expect(tokens > 0)
+    }
+
+    @Test("a use-case-configured SystemLanguageModel still responds")
+    func useCaseConfiguredModel() async throws {
+        let model = SystemLanguageModel(useCase: .general, guardrails: .default)
+        let session = LanguageModelSession(model: model)
+        let response = try await session.respond(
+            to: "Reply with the single word: ready",
+            options: deterministic
+        )
+        #expect(!response.content.isEmpty)
+    }
+
     @Test("a second request while one is in flight throws GenerationError.concurrentRequests")
     func concurrentRequestsThrow() async throws {
         let session = LanguageModelSession(model: ParityModel.make())
