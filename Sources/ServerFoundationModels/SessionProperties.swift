@@ -4,6 +4,7 @@
 // LanguageModelSession.SessionProperty wrapper.
 
 import Foundation
+import Logging
 
 public protocol SessionPropertyKey: SendableMetatype {
     associatedtype Value
@@ -34,8 +35,19 @@ public final class SessionPropertyValues: @unchecked Sendable {
     /// `@SessionProperty` wrappers resolve against the right session.
     @TaskLocal static var current: SessionPropertyValues?
 
-    /// Resolves reads/writes outside any session context.
-    static let orphan = SessionPropertyValues()
+    /// Warns (once per process) about `@SessionProperty` access outside any
+    /// session binding. Such reads return default values and writes are
+    /// dropped — they must never share process-global mutable state, which
+    /// would leak data across sessions on a server.
+    static func warnAccessOutsideSession() {
+        _ = warnAccessOutsideSessionOnce
+    }
+
+    private static let warnAccessOutsideSessionOnce: Void = {
+        Logger(label: "ServerFoundationModels").warning(
+            "@SessionProperty accessed outside a session context (e.g. from Task.detached): reads return default values and writes are dropped"
+        )
+    }()
 }
 
 // MARK: - Built-in entries
@@ -75,10 +87,24 @@ extension LanguageModelSession {
 
         public var wrappedValue: Value {
             get {
-                (SessionPropertyValues.current ?? SessionPropertyValues.orphan)[keyPath: keyPath]
+                guard let current = SessionPropertyValues.current else {
+                    // Outside any session binding: resolve against a fresh,
+                    // empty store so the read yields the default value —
+                    // never a process-global object shared across sessions.
+                    SessionPropertyValues.warnAccessOutsideSession()
+                    return SessionPropertyValues()[keyPath: keyPath]
+                }
+                return current[keyPath: keyPath]
             }
             nonmutating set {
-                (SessionPropertyValues.current ?? SessionPropertyValues.orphan)[keyPath: keyPath] = newValue
+                guard let current = SessionPropertyValues.current else {
+                    // Outside any session binding the write is dropped: it
+                    // has no session to belong to, and a global fallback
+                    // would leak values across sessions.
+                    SessionPropertyValues.warnAccessOutsideSession()
+                    return
+                }
+                current[keyPath: keyPath] = newValue
             }
         }
     }

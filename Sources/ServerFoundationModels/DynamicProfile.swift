@@ -11,13 +11,22 @@ extension LanguageModelSession {
     }
 
     public struct Profile: LanguageModelSession.DynamicProfile {
-        let instructionsText: String
-        let instructionTools: [ErasedTool]
+        /// The instructions value, stored unresolved: instruction texts and
+        /// tools are walked at profile-resolution time — once per request,
+        /// inside the session's SessionPropertyValues binding — so
+        /// `@SessionProperty`-driven instructions re-evaluate per request.
+        let instructions: any DynamicInstructions
+
+        var instructionsText: String {
+            instructions.allInstructionTexts.joined(separator: "\n")
+        }
+
+        var instructionTools: [ErasedTool] {
+            instructions.allInstructionTools
+        }
 
         public init(@DynamicInstructionsBuilder _ dynamicInstructions: () -> some DynamicInstructions) {
-            let instructions = dynamicInstructions()
-            self.instructionsText = instructions.allInstructionTexts.joined()
-            self.instructionTools = instructions.allInstructionTools
+            self.instructions = dynamicInstructions()
         }
 
         public var body: Never { fatalError("leaf DynamicProfile") }
@@ -126,11 +135,13 @@ typealias ErasedPerform = @Sendable (
 
 func erasePerform<Model: LanguageModel>(_ model: Model) -> ErasedPerform {
     let configuration = model.executorConfiguration
-    let cache = ExecutorCache<Model.Executor>()
     return { request, channel in
-        let executor = try cache.executor {
-            try Model.Executor(configuration: configuration)
-        }
+        // Executors are cached process-wide by configuration: profile bodies
+        // re-evaluate per request, and `.model(...)` must reuse the executor
+        // (and its connection pool) rather than constructing a new one.
+        let executor = try SharedExecutorRegistry.shared.executor(
+            for: configuration, as: Model.Executor.self
+        )
         try await executor.respond(to: request, model: model, streamingInto: channel)
     }
 }
@@ -302,7 +313,11 @@ struct ResolvedProfile {
     var toolCallingMode: GenerationOptions.ToolCallingMode?
     var reasoningLevel: ContextOptions.ReasoningLevel?
     var transcriptErrorHandlingPolicy: TranscriptErrorHandlingPolicy?
+    /// Persisted into the session transcript by `prepareTurn`.
     var historyTransform: (([Transcript.Entry]) -> [Transcript.Entry])?
+    /// Applied only to the transcript copy sent with each request — never
+    /// persisted, unlike `historyTransform`.
+    var inputFilter: (([Transcript.Entry]) -> [Transcript.Entry])?
     var onPrompt: [(Transcript.Prompt) async throws -> Void] = []
     var onResponse: [(Transcript.Response) async throws -> Void] = []
     var onToolCall: [(Transcript.ToolCall) async throws -> Void] = []
@@ -310,6 +325,10 @@ struct ResolvedProfile {
     var onToolCallOutputPair: [(Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void] = []
     var onActivate: [() async -> Void] = []
     var onDeactivate: [() async -> Void] = []
+    /// True when this resolution passed through a custom modifier's
+    /// `DynamicProfileModifierContent` placeholder — i.e. the modifier's
+    /// body composed its wrapped content.
+    var resolvedModifierContent = false
 }
 
 func resolveProfile(_ profile: some LanguageModelSession.DynamicProfile) -> ResolvedProfile {
@@ -349,7 +368,9 @@ extension LanguageModelSession.ConditionalDynamicProfile: ResolvableDynamicProfi
 
 extension LanguageModelSession.DynamicProfileModifierContent: ResolvableDynamicProfile {
     func resolveProfile() -> ResolvedProfile {
-        resolveAnyProfile(wrapped)
+        var resolved = resolveAnyProfile(wrapped)
+        resolved.resolvedModifierContent = true
+        return resolved
     }
 }
 
@@ -363,9 +384,12 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
             case .samplingMode(let value): resolved.samplingMode = value
             case .maximumResponseTokens(let value): resolved.maximumResponseTokens = value
             case .reasoningLevel(let value): resolved.reasoningLevel = value
-            case .historyTransform(let transform), .inputFilter(let transform):
+            case .historyTransform(let transform):
                 let existing = resolved.historyTransform
                 resolved.historyTransform = existing.map { first in { transform(first($0)) } } ?? transform
+            case .inputFilter(let filter):
+                let existing = resolved.inputFilter
+                resolved.inputFilter = existing.map { first in { filter(first($0)) } } ?? filter
             case .toolCallingMode(let mode): resolved.toolCallingMode = mode
             case .transcriptErrorHandlingPolicy(let policy): resolved.transcriptErrorHandlingPolicy = policy
             case .onPrompt(let action): resolved.onPrompt.append(action)
@@ -382,7 +406,43 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
         let wrapped = LanguageModelSession.DynamicProfileModifierContent<Modifier>(wrapped: content)
         let bodyProfile = modifier.body(content: wrapped)
         var fromBody = resolveAnyProfile(bodyProfile)
+        if fromBody.resolvedModifierContent {
+            // The body composed `content`, so the wrapped resolution is
+            // already folded in. Reset the marker for any enclosing modifier.
+            fromBody.resolvedModifierContent = resolved.resolvedModifierContent
+            return fromBody
+        }
+        // The body did NOT compose `content` (e.g. it returned a fresh
+        // Profile): inherit every field the body left unset from the wrapped
+        // content's resolution so tools, perform, options, and handlers are
+        // not silently dropped.
         if fromBody.instructionsText == nil { fromBody.instructionsText = resolved.instructionsText }
+        if fromBody.perform == nil { fromBody.perform = resolved.perform }
+        if fromBody.temperature == nil { fromBody.temperature = resolved.temperature }
+        if fromBody.samplingMode == nil { fromBody.samplingMode = resolved.samplingMode }
+        if fromBody.maximumResponseTokens == nil { fromBody.maximumResponseTokens = resolved.maximumResponseTokens }
+        if fromBody.toolCallingMode == nil { fromBody.toolCallingMode = resolved.toolCallingMode }
+        if fromBody.reasoningLevel == nil { fromBody.reasoningLevel = resolved.reasoningLevel }
+        if fromBody.transcriptErrorHandlingPolicy == nil {
+            fromBody.transcriptErrorHandlingPolicy = resolved.transcriptErrorHandlingPolicy
+        }
+        if let contentTransform = resolved.historyTransform {
+            let bodyTransform = fromBody.historyTransform
+            fromBody.historyTransform = bodyTransform.map { second in { second(contentTransform($0)) } } ?? contentTransform
+        }
+        if let contentFilter = resolved.inputFilter {
+            let bodyFilter = fromBody.inputFilter
+            fromBody.inputFilter = bodyFilter.map { second in { second(contentFilter($0)) } } ?? contentFilter
+        }
+        fromBody.tools = resolved.tools + fromBody.tools
+        fromBody.onPrompt = resolved.onPrompt + fromBody.onPrompt
+        fromBody.onResponse = resolved.onResponse + fromBody.onResponse
+        fromBody.onToolCall = resolved.onToolCall + fromBody.onToolCall
+        fromBody.onToolOutput = resolved.onToolOutput + fromBody.onToolOutput
+        fromBody.onToolCallOutputPair = resolved.onToolCallOutputPair + fromBody.onToolCallOutputPair
+        fromBody.onActivate = resolved.onActivate + fromBody.onActivate
+        fromBody.onDeactivate = resolved.onDeactivate + fromBody.onDeactivate
+        fromBody.resolvedModifierContent = resolved.resolvedModifierContent
         return fromBody
     }
 }
