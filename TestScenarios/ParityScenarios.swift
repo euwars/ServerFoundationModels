@@ -55,7 +55,7 @@ struct BehaviorParityScenarios {
                     for round in 0..<2 {
                         let response = try await session.respond(
                             to: "Reply with the single word: ok (worker \(worker), round \(round))",
-                            options: deterministic
+                            options: GenerationOptions(temperature: 0, maximumResponseTokens: 512)
                         )
                         #expect(!response.content.isEmpty)
                     }
