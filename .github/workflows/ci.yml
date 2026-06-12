@@ -27,7 +27,7 @@ jobs:
       - name: Build
         run: swift build --build-tests
       - name: API + differential parity tests (no model required)
-        run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios|WireCaptureTests'
+        run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests'
       - name: Signature-level interface diff
         run: |
           # -no-verify: interface verification trips over SwiftSyntax module

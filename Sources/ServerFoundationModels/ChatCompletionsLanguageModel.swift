@@ -357,7 +357,16 @@ final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendab
 
     private let lock = NSLock()
     private var handlers: [Int: LineStreamDelegate] = [:]
-    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    // Eagerly created: a `lazy var` is not thread-safe, and a first-use race
+    // from concurrent sessions can construct several URLSessions whose
+    // per-session taskIdentifiers collide in `handlers`, routing events to
+    // the wrong stream and stranding the losers mid-await.
+    private var session: URLSession!
+
+    private override init() {
+        super.init()
+        session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    }
 
     func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
         let (handler, task) = register(request)
@@ -426,20 +435,27 @@ final class LineStreamDelegate: @unchecked Sendable {
     }
 
     func response() async throws -> HTTPURLResponse {
-        try await withCheckedThrowingContinuation { continuation in
-            lock.lock()
-            if let storedResponse {
-                lock.unlock()
-                continuation.resume(returning: storedResponse)
-            } else if let finishedEarly {
-                lock.unlock()
-                continuation.resume(throwing: finishedEarly ?? LanguageModelTransportError(
-                    statusCode: 0, message: "connection closed before a response arrived"
-                ))
-            } else {
-                responseContinuation = continuation
-                lock.unlock()
+        // Cancellation-aware: cancelling the surrounding task cancels the
+        // URLSession task, whose didComplete callback resumes us with the
+        // cancellation error instead of stranding the continuation.
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                if let storedResponse {
+                    lock.unlock()
+                    continuation.resume(returning: storedResponse)
+                } else if let finishedEarly {
+                    lock.unlock()
+                    continuation.resume(throwing: finishedEarly ?? LanguageModelTransportError(
+                        statusCode: 0, message: "connection closed before a response arrived"
+                    ))
+                } else {
+                    responseContinuation = continuation
+                    lock.unlock()
+                }
             }
+        } onCancel: {
+            onTerminate?()
         }
     }
 
@@ -449,8 +465,14 @@ final class LineStreamDelegate: @unchecked Sendable {
         let continuation = responseContinuation
         responseContinuation = nil
         lock.unlock()
-        if let continuation, let http = response as? HTTPURLResponse {
-            continuation.resume(returning: http)
+        if let continuation {
+            if let http = response as? HTTPURLResponse {
+                continuation.resume(returning: http)
+            } else {
+                continuation.resume(throwing: LanguageModelTransportError(
+                    statusCode: 0, message: "non-HTTP response"
+                ))
+            }
         }
     }
 

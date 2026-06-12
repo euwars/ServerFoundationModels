@@ -159,6 +159,8 @@ struct WireCaptureTests {
 final class CaptureServer: @unchecked Sendable {
     private let socket: Int32
     let port: UInt16
+    private let body: String
+    private let head: String
     private let lock = NSLock()
     private var _lastBody: Data?
     private var _lastHeaders: [String: String] = [:]
@@ -176,7 +178,18 @@ final class CaptureServer: @unchecked Sendable {
         return _lastHeaders
     }
 
-    init() throws {
+    static let cannedSSE = "data: "
+        + #"{"choices":[{"index":0,"delta":{"content":"{\"title\": \"Crane\", \"category\": \"origami project\"}"}}]}"#
+        + "\n\ndata: [DONE]\n\n"
+
+    /// `body` is the response payload; `head` the status line + headers
+    /// (Content-Length and the blank line are appended automatically).
+    init(
+        body: String = CaptureServer.cannedSSE,
+        head: String = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close"
+    ) throws {
+        self.body = body
+        self.head = head
         let fd = Foundation.socket(AF_INET, SOCK_STREAM_VALUE, 0)
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
@@ -257,9 +270,7 @@ final class CaptureServer: @unchecked Sendable {
             }
         }
 
-        let payload = #"{"choices":[{"index":0,"delta":{"content":"{\"title\": \"Crane\", \"category\": \"origami project\"}"}}]}"#
-        let sse = "data: \(payload)\n\ndata: [DONE]\n\n"
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: \(sse.utf8.count)\r\nConnection: close\r\n\r\n\(sse)"
+        let response = "\(head)\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
         _ = response.withCString { pointer in
             write(client, pointer, response.utf8.count)
         }
