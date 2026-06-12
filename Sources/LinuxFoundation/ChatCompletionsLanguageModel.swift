@@ -72,24 +72,24 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
             let urlRequest = try makeURLRequest(for: request)
-            let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
+            let (lines, response) = try await HTTPLineStream.connect(urlRequest)
 
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            if response.statusCode != 200 {
                 var body = ""
-                for try await line in bytes.lines {
+                for try await line in lines {
                     body += line
                     if body.count > 4096 { break }
                 }
-                if http.statusCode == 429 {
+                if response.statusCode == 429 {
                     throw LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: body))
                 }
-                throw LanguageModelTransportError(statusCode: http.statusCode, message: body)
+                throw LanguageModelTransportError(statusCode: response.statusCode, message: body)
             }
 
             // Accumulates streamed tool-call fragments by choice index.
             var toolCalls: [Int: (id: String, name: String, arguments: String)] = [:]
 
-            for try await line in bytes.lines {
+            for try await line in lines {
                 guard line.hasPrefix("data:") else { continue }
                 let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 if payload == "[DONE]" { break }
@@ -293,3 +293,130 @@ extension JSONNode {
         return elements[index]
     }
 }
+
+
+// MARK: - Cross-platform SSE line streaming
+
+/// Streams an HTTP response body line by line. Darwin uses `URLSession.bytes`;
+/// Linux corelibs lacks it, so a data-delegate feeds an AsyncThrowingStream.
+enum HTTPLineStream {
+    static func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
+        #if canImport(Darwin)
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw LanguageModelTransportError(statusCode: 0, message: "non-HTTP response")
+        }
+        let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
+        let task = Task {
+            do {
+                for try await line in bytes.lines {
+                    continuation.yield(line)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+        return (stream, http)
+        #else
+        let delegate = LineStreamDelegate()
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        session.dataTask(with: request).resume()
+        let response = try await delegate.response()
+        return (delegate.lines, response)
+        #endif
+    }
+}
+
+#if !canImport(Darwin)
+private final class LineStreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
+    private var storedResponse: HTTPURLResponse?
+    private var finishedEarly: (any Error)??
+
+    let lines: AsyncThrowingStream<String, any Error>
+    private let lineContinuation: AsyncThrowingStream<String, any Error>.Continuation
+
+    override init() {
+        (lines, lineContinuation) = AsyncThrowingStream.makeStream()
+        super.init()
+    }
+
+    func response() async throws -> HTTPURLResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let storedResponse {
+                lock.unlock()
+                continuation.resume(returning: storedResponse)
+            } else if let finishedEarly {
+                lock.unlock()
+                continuation.resume(throwing: finishedEarly ?? LanguageModelTransportError(
+                    statusCode: 0, message: "connection closed before a response arrived"
+                ))
+            } else {
+                responseContinuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        lock.lock()
+        storedResponse = response as? HTTPURLResponse
+        let continuation = responseContinuation
+        responseContinuation = nil
+        lock.unlock()
+        if let continuation, let http = response as? HTTPURLResponse {
+            continuation.resume(returning: http)
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        buffer.append(data)
+        var emitted: [String] = []
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer[buffer.startIndex..<newline]
+            buffer.removeSubrange(buffer.startIndex...newline)
+            emitted.append(String(decoding: lineData, as: UTF8.self)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+        }
+        lock.unlock()
+        for line in emitted {
+            lineContinuation.yield(line)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        lock.lock()
+        if !buffer.isEmpty {
+            let trailing = String(decoding: buffer, as: UTF8.self)
+            buffer.removeAll()
+            lineContinuation.yield(trailing)
+        }
+        let continuation = responseContinuation
+        responseContinuation = nil
+        finishedEarly = .some(error)
+        lock.unlock()
+        if let continuation {
+            continuation.resume(throwing: error ?? LanguageModelTransportError(
+                statusCode: 0, message: "connection closed before a response arrived"
+            ))
+        }
+        if let error {
+            lineContinuation.finish(throwing: error)
+        } else {
+            lineContinuation.finish()
+        }
+    }
+}
+#endif

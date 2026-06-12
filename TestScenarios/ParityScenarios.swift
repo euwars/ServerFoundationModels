@@ -468,7 +468,10 @@ struct BehaviorParityScenarios {
         #expect(tokens > 0)
     }
 
-    @Test("a use-case-configured SystemLanguageModel still responds")
+    @Test(
+        "a use-case-configured SystemLanguageModel still responds",
+        .enabled(if: ParityModel.isOnDeviceBacked, "SystemLanguageModel is Apple-OS-bound")
+    )
     func useCaseConfiguredModel() async throws {
         let model = SystemLanguageModel(useCase: .general, guardrails: .default)
         let session = LanguageModelSession(model: model)
@@ -935,12 +938,13 @@ struct ParityProfile: LanguageModelSession.DynamicProfile {
             Profile {
                 ParityInstructions(mode: mode)
             }
+            .model(ParityModel.make())
             .temperature(0.0)
         } else {
             Profile {
                 ParityInstructions(mode: mode)
             }
-            .model(SystemLanguageModel())
+            .model(ParityModel.make())
             .historyTransform { entries in
                 Array(entries.suffix(4))
             }
@@ -953,6 +957,7 @@ struct ParityInjectionProfile: LanguageModelSession.DynamicProfile {
         Profile {
             Instructions("You answer questions about the user using the conversation history.")
         }
+        .model(ParityModel.make())
         .historyTransform { entries in
             let injected = Transcript.Entry.response(Transcript.Response(segments: [
                 .text(Transcript.TextSegment(content: "Noted: the user's favorite animal is the capybara."))
@@ -974,6 +979,7 @@ struct ParityCallbackProfile: LanguageModelSession.DynamicProfile {
         Profile {
             Instructions("You are a terse assistant.")
         }
+        .model(ParityModel.make())
         .temperature(0.0)
         .onPrompt { _ in recorder.record("prompt") }
         .onResponse { _ in recorder.record("response") }

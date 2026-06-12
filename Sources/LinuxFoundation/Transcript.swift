@@ -134,6 +134,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         }
         #else
         public var data: Data
+        public var url: URL? { nil }
         public init(data: Data) { self.data = data }
         #endif
     }

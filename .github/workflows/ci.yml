@@ -30,9 +30,13 @@ jobs:
         run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios'
       - name: Signature-level interface diff
         run: |
+          # -no-verify: interface verification trips over SwiftSyntax module
+          # aliasing from the macro target; the diff is the real gate.
           swift build -Xswiftc -enable-library-evolution \
+            -Xswiftc -no-verify-emitted-module-interface \
             -Xswiftc -emit-module-interface-path -Xswiftc /tmp/LinuxFoundation.swiftinterface \
             --target LinuxFoundation
+          apt-get update -qq && apt-get install -y -qq python3 > /dev/null
           python3 scripts/interface-diff.py \
             reference/FoundationModels-macOS27.swiftinterface /tmp/LinuxFoundation.swiftinterface
 

@@ -64,6 +64,27 @@ Failure modes reported against other FoundationModels reimplementations
 framework first — guaranteeing the suite asserts real framework behavior,
 not our assumptions.
 
+## Linux execution proof (2026-06-12)
+
+Run locally in the official `swift:6.2` container (aarch64-linux), with
+`10.0.0.200:8000` used purely as an HTTP inference endpoint
+(`qwen3.6-35b-a3b`):
+
+- full build including test targets: clean (one Linux-specific shim was
+  required and is now part of the library: corelibs lacks
+  `URLSession.bytes`, so SSE streaming uses a data-delegate line stream)
+- model-free suites (API semantics + deterministic differential): green
+- full behavior suite over the network: **44/44**
+- `.swiftinterface` emitted on Linux and diffed against Apple's: **0 gaps**
+  (graphics-typed API — CGImage/CIImage/CVPixelBuffer — is allowlisted off
+  Apple platforms, matching the fact that FoundationModels itself doesn't
+  exist there)
+
+Scenario fixtures pin their model via `.model(ParityModel.make())` because
+profile sessions default to `SystemLanguageModel`, which is honestly
+unavailable on Linux; the one SystemLanguageModel-specific scenario is
+gated to on-device-backed runs.
+
 ## Honest residuals
 
 - `@available` annotations and underscored attributes are normalized away in

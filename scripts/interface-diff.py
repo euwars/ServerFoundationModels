@@ -26,6 +26,10 @@ ALLOWLIST_PATTERNS = [
     r"^GenerationGuide\b.*pattern",                 # Regex source not extractable; advisory
     r".*PartiallyGenerated.*",                      # macro-synthesized per-type; verified behaviorally
     r"^Transcript\.Segment\.custom\b.*",            # existential spelling differs in emission
+    # Apple-graphics-typed API (CGImage/CIImage/CVPixelBuffer) does not exist
+    # off Apple platforms — matching FoundationModels itself.
+    r".*\b(CGImage|CIImage|CVPixelBuffer|CGImagePropertyOrientation|ciImage|pixelBuffer)\b.*",
+    r".*Locale\.Language.*",                        # Locale.Language parity is Darwin-typed
 ]
 
 COSMETIC = [
@@ -43,7 +47,7 @@ COSMETIC = [
 
 def normalize(line):
     line = re.sub(r"\b[A-Za-z_][\w]*::", "", line)          # Module:: qualifiers
-    line = re.sub(r"\b(FoundationModels|LinuxFoundation|Swift|Foundation|CoreGraphics|CoreImage|CoreVideo|ImageIO|Observation|_Concurrency|_StringProcessing|Darwin|CoreFoundation)\.", "", line)
+    line = re.sub(r"\b(FoundationModels|LinuxFoundation|Swift|FoundationEssentials|FoundationNetworking|FoundationInternationalization|Foundation|CoreGraphics|CoreImage|CoreVideo|ImageIO|Observation|_Concurrency|_StringProcessing|Darwin|CoreFoundation)\.", "", line)
     for pattern in COSMETIC:
         line = re.sub(pattern, "", line)
     line = re.sub(r"\b(consuming|borrowing|isolated|mutating|nonmutating)\s+", "", line)

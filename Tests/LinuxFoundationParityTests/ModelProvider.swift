@@ -42,14 +42,15 @@ enum ParityModel {
         if useChatCompletions {
             var request = URLRequest(url: baseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 2
-            var available = false
+            final class Flag: @unchecked Sendable { var value = false }
+            let flag = Flag()
             let semaphore = DispatchSemaphore(value: 0)
             URLSession.shared.dataTask(with: request) { _, response, _ in
-                available = (response as? HTTPURLResponse)?.statusCode == 200
+                flag.value = (response as? HTTPURLResponse)?.statusCode == 200
                 semaphore.signal()
             }.resume()
             semaphore.wait()
-            return available
+            return flag.value
         }
         return SystemLanguageModel.default.isAvailable
     }()
