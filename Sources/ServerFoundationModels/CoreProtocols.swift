@@ -73,8 +73,13 @@ extension Int: Generable {
         switch content.node {
         case .integer(let value):
             self = value
-        case .number(let value) where value == value.rounded():
-            self = Int(value)
+        // `Int(exactly:)` rejects non-integral, non-finite, and out-of-range
+        // doubles instead of trapping on untrusted model output.
+        case .number(let value):
+            guard value == value.rounded(), let exact = Int(exactly: value.rounded()) else {
+                throw GeneratedContentError("expected an integer, got \(content.node.serialized)")
+            }
+            self = exact
         default:
             throw GeneratedContentError("expected an integer, got \(content.node.serialized)")
         }
@@ -149,7 +154,12 @@ extension Float: Generable {
 
 extension Decimal: Generable {
     public init(_ content: GeneratedContent) throws {
-        self = Decimal(try Double(content))
+        let value = try Double(content)
+        // `Decimal(Double)` traps on non-finite input (untrusted model output).
+        guard value.isFinite else {
+            throw GeneratedContentError("expected a finite number, got \(content.node.serialized)")
+        }
+        self = Decimal(value)
     }
 
     public static var generationSchema: GenerationSchema {

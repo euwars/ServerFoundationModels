@@ -36,8 +36,15 @@ extension JSONNode {
     }
 
     private struct Parser {
+        /// Maximum container nesting before parsing fails. Bounds recursion so
+        /// adversarial input (e.g. 100k `[`) throws instead of overflowing the
+        /// stack. The lenient path (`parseLenient`) funnels through the same
+        /// parser, so it is covered by the same guard.
+        static let maximumDepth = 256
+
         let scalars: [Unicode.Scalar]
         var index = 0
+        var depth = 0
 
         var isAtEnd: Bool { index >= scalars.count }
 
@@ -62,6 +69,11 @@ extension JSONNode {
         }
 
         mutating func parseValue() throws -> JSONNode {
+            depth += 1
+            defer { depth -= 1 }
+            guard depth <= Parser.maximumDepth else {
+                throw ParseError(reason: "maximum nesting depth exceeded")
+            }
             skipWhitespace()
             switch try peek() {
             case "{": return try parseObject()
@@ -135,13 +147,24 @@ extension JSONNode {
                     case "u":
                         let first = try parseHexScalar()
                         if first >= 0xD800, first <= 0xDBFF {
-                            try consume("\\u")
+                            // A high surrogate must be immediately followed by
+                            // a `\uXXXX` low surrogate (0xDC00...0xDFFF).
+                            guard index + 1 < scalars.count,
+                                  scalars[index] == "\\", scalars[index + 1] == "u" else {
+                                throw ParseError(reason: "unpaired high surrogate in unicode escape")
+                            }
+                            index += 2
                             let second = try parseHexScalar()
+                            guard (0xDC00...0xDFFF).contains(second) else {
+                                throw ParseError(reason: "invalid low surrogate in unicode escape")
+                            }
                             let combined = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
                             guard let scalar = Unicode.Scalar(combined) else {
                                 throw ParseError(reason: "invalid surrogate pair")
                             }
                             result.append(scalar)
+                        } else if first >= 0xDC00, first <= 0xDFFF {
+                            throw ParseError(reason: "unpaired low surrogate in unicode escape")
                         } else {
                             guard let scalar = Unicode.Scalar(first) else {
                                 throw ParseError(reason: "invalid unicode escape")
@@ -215,7 +238,9 @@ extension JSONNode {
         case .integer(let value):
             return String(value)
         case .number(let value):
-            return String(value)
+            // NaN/±infinity are not representable in JSON; emit null
+            // (JSON.stringify convention) so output is always parseable.
+            return value.isFinite ? String(value) : "null"
         case .string(let value):
             return JSONNode.escape(value)
         case .array(let elements):
