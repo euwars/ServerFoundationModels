@@ -19,9 +19,12 @@ FMU_TEST_ENDPOINT=http://10.0.0.200:8000/v1 FMU_TEST_MODEL=qwen3-moe \
 
 The LinuxFoundation parity suite also runs against that endpoint
 (`PARITY_BACKEND=chat-completions PARITY_BASE_URL=http://10.0.0.200:8000
-PARITY_MODEL=qwen3-moe`): 39/41, the two tool-calling scenarios requiring
-the server to enable a tool parser (`vllm serve ... --enable-auto-tool-choice
---tool-call-parser hermes`).
+PARITY_MODEL=qwen3-moe`): **41/41** after enabling the server's tool parser
+(vllm 0.22.1, restarted with `--enable-auto-tool-choice --tool-call-parser
+hermes`; full command in ~/vllm-tools.log's header on the host). Every
+behavior scenario — tool loop, structured output, recursive schemas, typed
+streaming, session properties, dynamic profiles — holds against a remote
+open model, not just Apple's on-device one.
 
 ## Semantics this exercise locked in (now load-bearing in LinuxFoundation)
 
