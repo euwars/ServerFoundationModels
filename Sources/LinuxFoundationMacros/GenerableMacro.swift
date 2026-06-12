@@ -162,7 +162,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             .map { "    public var \($0.name): \($0.partialType)?" }
             .joined(separator: "\n")
         let partialDecoding = properties
-            .map { "        self.\($0.name) = try? generatedContent.value(\($0.partialType)?.self, forProperty: \"\($0.name)\") ?? nil" }
+            .map { "        self.\($0.name) = try? generatedContent.value(Optional<\($0.partialType)>.self, forProperty: \"\($0.name)\") ?? nil" }
             .joined(separator: "\n")
         members.append(
             """

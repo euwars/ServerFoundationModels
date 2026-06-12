@@ -12,9 +12,12 @@ extension LanguageModelSession {
 
     public struct Profile: LanguageModelSession.DynamicProfile {
         let instructionsText: String
+        let instructionTools: [ErasedTool]
 
         public init(@DynamicInstructionsBuilder _ dynamicInstructions: () -> some DynamicInstructions) {
-            self.instructionsText = dynamicInstructions().allInstructionTexts.joined(separator: "\n\n")
+            let instructions = dynamicInstructions()
+            self.instructionsText = instructions.allInstructionTexts.joined()
+            self.instructionTools = instructions.allInstructionTools
         }
 
         public var body: Never { fatalError("leaf DynamicProfile") }
@@ -80,6 +83,11 @@ extension LanguageModelSession {
 extension Never: LanguageModelSession.DynamicProfile {}
 
 extension LanguageModelSession.DynamicProfile {
+    public typealias Profile = LanguageModelSession.Profile
+    public typealias DynamicProfile = LanguageModelSession.DynamicProfile
+}
+
+extension LanguageModelSession.DynamicProfileModifier {
     public typealias Profile = LanguageModelSession.Profile
     public typealias DynamicProfile = LanguageModelSession.DynamicProfile
 }
@@ -276,6 +284,7 @@ extension LanguageModelSession.DynamicProfile {
 
 struct ResolvedProfile {
     var instructionsText: String?
+    var tools: [ErasedTool] = []
     var perform: ErasedPerform?
     var temperature: Double?
     var samplingMode: GenerationOptions.SamplingMode?
@@ -300,6 +309,7 @@ private func resolveAnyProfile(_ profile: any LanguageModelSession.DynamicProfil
     if let leaf = profile as? LanguageModelSession.Profile {
         var resolved = ResolvedProfile()
         resolved.instructionsText = leaf.instructionsText.isEmpty ? nil : leaf.instructionsText
+        resolved.tools = leaf.instructionTools
         return resolved
     }
     if let resolvable = profile as? ResolvableDynamicProfile {

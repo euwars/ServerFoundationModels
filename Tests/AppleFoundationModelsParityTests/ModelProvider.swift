@@ -12,6 +12,8 @@ enum ParityModel {
         .default
     }
 
+    static let isOnDeviceBacked = true
+
     static let isAvailable: Bool = {
         if case .available = SystemLanguageModel.default.availability {
             return true

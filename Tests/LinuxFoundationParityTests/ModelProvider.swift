@@ -25,6 +25,8 @@ enum ParityModel {
     )!
     static let modelName = ProcessInfo.processInfo.environment["PARITY_MODEL"] ?? "qwen3.5:9b"
 
+    static let isOnDeviceBacked = !useChatCompletions
+
     static let displayName = useChatCompletions
         ? "\(modelName) via \(baseURL.absoluteString) (ChatCompletionsLanguageModel)"
         : "Apple on-device via LinuxFoundation.SystemLanguageModel"

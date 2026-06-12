@@ -15,6 +15,11 @@ extension Never: DynamicInstructions {
 /// types recurse through `body`.
 protocol ResolvableDynamicInstructions {
     var resolvedInstructionTexts: [String] { get }
+    var resolvedInstructionTools: [ErasedTool] { get }
+}
+
+extension ResolvableDynamicInstructions {
+    var resolvedInstructionTools: [ErasedTool] { [] }
 }
 
 extension DynamicInstructions {
@@ -24,6 +29,25 @@ extension DynamicInstructions {
         }
         return body.allInstructionTexts
     }
+
+    var allInstructionTools: [ErasedTool] {
+        if let resolvable = self as? ResolvableDynamicInstructions {
+            return resolvable.resolvedInstructionTools
+        }
+        return body.allInstructionTools
+    }
+}
+
+/// Tools declared inline in a DynamicInstructions body; registered with the
+/// session for the requests the instructions are active.
+struct ToolDynamicInstructions: DynamicInstructions, ResolvableDynamicInstructions {
+    let tools: [ErasedTool]
+
+    var body: Never { fatalError("leaf DynamicInstructions") }
+    typealias Body = Never
+
+    var resolvedInstructionTexts: [String] { [] }
+    var resolvedInstructionTools: [ErasedTool] { tools }
 }
 
 extension Never: ResolvableDynamicInstructions {
@@ -60,6 +84,14 @@ public struct TupleDynamicInstructions<each Content: DynamicInstructions>: Dynam
         }
         return texts
     }
+
+    var resolvedInstructionTools: [ErasedTool] {
+        var tools: [ErasedTool] = []
+        for element in repeat each content {
+            tools.append(contentsOf: element.allInstructionTools)
+        }
+        return tools
+    }
 }
 
 public struct ConditionalDynamicInstructions<TrueContent: DynamicInstructions, FalseContent: DynamicInstructions>: DynamicInstructions, ResolvableDynamicInstructions {
@@ -82,6 +114,13 @@ public struct ConditionalDynamicInstructions<TrueContent: DynamicInstructions, F
         case .falseContent(let content): return content.allInstructionTexts
         }
     }
+
+    var resolvedInstructionTools: [ErasedTool] {
+        switch branch {
+        case .trueContent(let content): return content.allInstructionTools
+        case .falseContent(let content): return content.allInstructionTools
+        }
+    }
 }
 
 public struct AnyDynamicInstructions: DynamicInstructions, ResolvableDynamicInstructions {
@@ -99,6 +138,46 @@ public struct AnyDynamicInstructions: DynamicInstructions, ResolvableDynamicInst
     public typealias Body = Never
 
     var resolvedInstructionTexts: [String] { wrapped.allInstructionTexts }
+    var resolvedInstructionTools: [ErasedTool] { wrapped.allInstructionTools }
+}
+
+public struct _DynamicInstructionsForEach<Data, ID, Content>: DynamicInstructions, ResolvableDynamicInstructions
+where Data: RandomAccessCollection, ID: Hashable, Content: DynamicInstructions {
+    let data: Data
+    let content: (Data.Element) -> Content
+
+    public init(
+        _ data: Data,
+        id: KeyPath<Data.Element, ID>,
+        @DynamicInstructionsBuilder content: @escaping (Data.Element) -> Content
+    ) {
+        self.data = data
+        self.content = content
+    }
+
+    public var body: Never { fatalError("leaf DynamicInstructions") }
+    public typealias Body = Never
+
+    var resolvedInstructionTexts: [String] {
+        data.flatMap { content($0).allInstructionTexts }
+    }
+
+    var resolvedInstructionTools: [ErasedTool] {
+        data.flatMap { content($0).allInstructionTools }
+    }
+}
+
+extension _DynamicInstructionsForEach where ID == Data.Element.ID, Data.Element: Identifiable {
+    public init(
+        _ data: Data,
+        @DynamicInstructionsBuilder content: @escaping (Data.Element) -> Content
+    ) {
+        self.init(data, id: \.id, content: content)
+    }
+}
+
+extension DynamicInstructions {
+    public typealias ForEach = _DynamicInstructionsForEach
 }
 
 @resultBuilder
@@ -120,6 +199,14 @@ public struct DynamicInstructionsBuilder {
 
     public static func buildExpression(_ text: String) -> Instructions {
         Instructions(text: text)
+    }
+
+    public static func buildExpression<T>(_ expression: T) -> some DynamicInstructions where T: Tool {
+        ToolDynamicInstructions(tools: [ErasedTool(expression)])
+    }
+
+    public static func buildExpression(_ tools: [any Tool]) -> some DynamicInstructions {
+        ToolDynamicInstructions(tools: tools.map { ErasedTool($0) })
     }
 
     public static func buildOptional<Content: DynamicInstructions>(

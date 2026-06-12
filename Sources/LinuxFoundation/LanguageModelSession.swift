@@ -98,7 +98,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         self.properties.rootDynamicInstructions = erased
         self.profileResolver = {
             var resolved = ResolvedProfile()
-            let text = erased.allInstructionTexts.joined(separator: "\n\n")
+            let text = erased.allInstructionTexts.joined()
             resolved.instructionsText = text.isEmpty ? nil : text
             return resolved
         }
@@ -441,67 +441,100 @@ public final class LanguageModelSession: @unchecked Sendable {
         var usage: Usage
     }
 
+    /// Resolves the dynamic profile for a new prompt, persisting its history
+    /// transform and refreshed instructions entry into the stored transcript —
+    /// matching the framework: the transcript IS the post-profile state.
+    private func prepareTurn(options: GenerationOptions, firstRound: Bool = true) async throws -> (ResolvedProfile?, GenerationOptions) {
+        var allEntries = transcript.allEntries
+        let instructionEntries = allEntries.filter { if case .instructions = $0 { return true }; return false }
+        allEntries.removeAll { if case .instructions = $0 { return true }; return false }
+
+        // History modifiers read and write the conversational history through
+        // the session's `history` property during resolution; the session
+        // adopts whatever they leave behind.
+        properties.history = allEntries[...]
+        guard let profileResolver else { return (nil, options) }
+        let resolved = SessionPropertyValues.$current.withValue(properties) { profileResolver() }
+
+        // onPrompt callbacks run with the session's properties bound so
+        // history modifiers (e.g. rolling windows) can rewrite `history`;
+        // the session then adopts whatever they leave behind.
+        if firstRound, case .prompt(let promptEntry)? = allEntries.last {
+            try await SessionPropertyValues.$current.withValue(properties) {
+                for action in resolved.onPrompt { try await action(promptEntry) }
+            }
+        }
+        var entries = Array(properties.history)
+
+        if let transform = resolved.historyTransform {
+            entries = transform(entries)
+            switch entries.last {
+            case .prompt, .toolOutput:
+                break
+            default:
+                throw LanguageModelTransportError(
+                    statusCode: 0,
+                    message: "Transcript must end with a .prompt or .toolOutput entry."
+                )
+            }
+        }
+
+        let activeTools = tools + resolved.tools
+        if let instructionsText = resolved.instructionsText {
+            entries.insert(.instructions(Transcript.Instructions(
+                segments: [.text(.init(content: instructionsText))],
+                toolDefinitions: activeTools.map {
+                    Transcript.ToolDefinition(name: $0.name, description: $0.description, parameters: $0.parameters)
+                }
+            )), at: 0)
+        } else {
+            entries.insert(contentsOf: instructionEntries, at: 0)
+        }
+        replaceTranscript(Transcript(entries: entries))
+
+        var effectiveOptions = options
+        if effectiveOptions.temperature == nil { effectiveOptions.temperature = resolved.temperature }
+        if effectiveOptions.samplingMode == nil { effectiveOptions.samplingMode = resolved.samplingMode }
+        if effectiveOptions.maximumResponseTokens == nil {
+            effectiveOptions.maximumResponseTokens = resolved.maximumResponseTokens
+        }
+        if effectiveOptions.toolCallingMode == nil {
+            effectiveOptions.toolCallingMode = resolved.toolCallingMode
+        }
+        if let policy = resolved.transcriptErrorHandlingPolicy {
+            errorPolicy = policy
+        }
+        return (resolved, effectiveOptions)
+    }
+
     private func generateLoop(
         schema: GenerationSchema?,
         options: GenerationOptions,
         onCumulativeText: (@Sendable (String) -> Void)?
     ) async throws -> LoopResult {
+        var turnUsage = Usage()
+        var firstRound = true
+
         while true {
-            // Profile-based sessions re-resolve model/instructions/options
-            // before every request; resolution and tool execution see this
-            // session's properties via the task-local context.
-            properties.history = transcript.allEntries[...]
-            let resolved = SessionPropertyValues.$current.withValue(properties) {
-                profileResolver?()
-            }
-            var requestEntries = transcript.allEntries
-            if let transform = resolved?.historyTransform {
-                // Matching Apple: the transform receives the full request
-                // transcript (in-flight prompt included) and must keep it
-                // ending in a prompt or tool output.
-                requestEntries = transform(requestEntries)
-                switch requestEntries.last {
-                case .prompt, .toolOutput:
-                    break
-                default:
-                    throw LanguageModelTransportError(
-                        statusCode: 0,
-                        message: "Transcript must end with a .prompt or .toolOutput entry."
-                    )
-                }
-            }
-            if let instructionsText = resolved?.instructionsText {
-                requestEntries.removeAll { if case .instructions = $0 { return true }; return false }
-                requestEntries.insert(.instructions(Transcript.Instructions(
-                    segments: [.text(.init(content: instructionsText))],
-                    toolDefinitions: toolDefinitions
-                )), at: 0)
-            }
-            var effectiveOptions = options
-            if effectiveOptions.temperature == nil { effectiveOptions.temperature = resolved?.temperature }
-            if effectiveOptions.samplingMode == nil { effectiveOptions.samplingMode = resolved?.samplingMode }
-            if effectiveOptions.maximumResponseTokens == nil {
-                effectiveOptions.maximumResponseTokens = resolved?.maximumResponseTokens
-            }
-            if effectiveOptions.toolCallingMode == nil {
-                effectiveOptions.toolCallingMode = resolved?.toolCallingMode
-            }
-            if let policy = resolved?.transcriptErrorHandlingPolicy {
-                errorPolicy = policy
-            }
-            if let resolved, case .prompt(let promptEntry)? = requestEntries.last {
-                for action in resolved.onPrompt { try await action(promptEntry) }
+            // The profile is dynamic: it re-resolves before every round, so a
+            // tool that changes state mid-loop (e.g. activating a skill)
+            // refreshes the instructions for the continuation request.
+            let (resolved, effectiveOptions) = try await prepareTurn(options: options, firstRound: firstRound)
+            firstRound = false
+            let activeTools = tools + (resolved?.tools ?? [])
+            let activeToolDefinitions = activeTools.map {
+                Transcript.ToolDefinition(name: $0.name, description: $0.description, parameters: $0.parameters)
             }
 
             let channel = LanguageModelExecutorGenerationChannel()
             var request = LanguageModelExecutorGenerationRequest(
-                transcript: Transcript(entries: requestEntries),
-                enabledTools: toolDefinitions,
+                transcript: transcript,
+                enabledTools: activeToolDefinitions,
                 schema: schema,
                 generationOptions: effectiveOptions
             )
             request.contextOptions = ContextOptions(reasoningLevel: resolved?.reasoningLevel)
-            request.executableTools = tools
+            request.executableTools = activeTools
 
             let perform = resolved?.perform ?? self.perform
             let properties = self.properties
@@ -520,11 +553,13 @@ public final class LanguageModelSession: @unchecked Sendable {
             var recordedCalls: [Transcript.ToolCall] = []
             var recordedOutputs: [Transcript.ToolOutput] = []
 
+            // Streamed usage reports are running totals: the latest report
+            // for the round wins; rounds add together for the turn.
             func accumulate(_ reported: LanguageModelExecutorGenerationChannel.Usage) {
-                usage.input.totalTokenCount += reported.input.totalTokenCount
-                usage.input.cachedTokenCount += reported.input.cachedTokenCount
-                usage.output.totalTokenCount += reported.output.totalTokenCount
-                usage.output.reasoningTokenCount += reported.output.reasoningTokenCount
+                usage.input.totalTokenCount = reported.input.totalTokenCount
+                usage.input.cachedTokenCount = reported.input.cachedTokenCount
+                usage.output.totalTokenCount = reported.output.totalTokenCount
+                usage.output.reasoningTokenCount = reported.output.reasoningTokenCount
             }
 
             for await event in channel.stream {
@@ -591,6 +626,10 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
             try await executorTask.value
 
+            turnUsage.input.totalTokenCount += usage.input.totalTokenCount
+            turnUsage.input.cachedTokenCount += usage.input.cachedTokenCount
+            turnUsage.output.totalTokenCount += usage.output.totalTokenCount
+            turnUsage.output.reasoningTokenCount += usage.output.reasoningTokenCount
             recordUsage(usage)
 
             // The model's thinking is part of the durable record, ahead of
@@ -619,7 +658,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             if toolCalls.isEmpty {
-                return LoopResult(text: text, usage: usage)
+                return LoopResult(text: text, usage: turnUsage)
             }
 
             let transcriptCalls = try toolCalls.map { call in
@@ -634,7 +673,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             appendEntry(.toolCalls(Transcript.ToolCalls(calls: transcriptCalls)))
 
             for call in transcriptCalls {
-                guard let tool = tools.first(where: { $0.name == call.toolName }) else {
+                guard let tool = activeTools.first(where: { $0.name == call.toolName }) else {
                     throw LanguageModelTransportError(statusCode: 0, message: "the model called unregistered tool \(call.toolName)")
                 }
                 let output: String
@@ -712,6 +751,12 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    private func replaceTranscript(_ transcript: Transcript) {
+        lock.lock()
+        _transcript = transcript
+        lock.unlock()
     }
 
     private func truncateTranscript(to count: Int) {

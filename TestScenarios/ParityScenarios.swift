@@ -399,7 +399,10 @@ struct BehaviorParityScenarios {
         }
     }
 
-    @Test(".deep reasoningLevel reaches the backend (the on-device model rejects it)")
+    @Test(
+        ".deep reasoningLevel reaches the backend (the on-device model rejects it)",
+        .enabled(if: ParityModel.isOnDeviceBacked, "reasoning-capable backends accept .deep")
+    )
     func deepReasoningLevel() async throws {
         // The on-device model does not support reasoning; the request must
         // surface that as an error rather than silently dropping the level.
