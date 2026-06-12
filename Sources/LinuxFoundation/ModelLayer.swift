@@ -100,6 +100,11 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
     public var schema: GenerationSchema?
     public var generationOptions: GenerationOptions
 
+    /// Callable tools, for executors that run the tool loop natively
+    /// (e.g. the SystemLanguageModel bridge). Most executors emit
+    /// `.toolCall` events instead and let the session execute.
+    var executableTools: [ErasedTool] = []
+
     public init(
         id: UUID = UUID(),
         transcript: Transcript,
@@ -123,8 +128,14 @@ public struct LanguageModelExecutorGenerationChannel: Sendable {
     enum Event: Sendable {
         /// An incremental piece of response text.
         case textDelta(String)
-        /// A complete tool invocation requested by the model.
+        /// A complete tool invocation requested by the model; the session
+        /// executes the tool and re-requests with the output.
         case toolCall(id: String, toolName: String, argumentsJSON: String)
+        /// A tool invocation the executor already ran natively (e.g. inside
+        /// Apple's on-device session); recorded in the transcript without
+        /// re-execution.
+        case recordedToolCall(id: String, toolName: String, argumentsJSON: String)
+        case recordedToolOutput(id: String, toolName: String, text: String)
     }
 
     let stream: AsyncStream<Event>

@@ -240,12 +240,13 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) async throws -> String {
         while true {
             let channel = LanguageModelExecutorGenerationChannel()
-            let request = LanguageModelExecutorGenerationRequest(
+            var request = LanguageModelExecutorGenerationRequest(
                 transcript: transcript,
                 enabledTools: toolDefinitions,
                 schema: schema,
                 generationOptions: options
             )
+            request.executableTools = tools
 
             let perform = self.perform
             let executorTask = Task {
@@ -255,6 +256,8 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             var text = ""
             var toolCalls: [(id: String, toolName: String, argumentsJSON: String)] = []
+            var recordedCalls: [Transcript.ToolCall] = []
+            var recordedOutputs: [Transcript.ToolOutput] = []
             for await event in channel.stream {
                 switch event {
                 case .textDelta(let delta):
@@ -262,9 +265,28 @@ public final class LanguageModelSession: @unchecked Sendable {
                     onCumulativeText?(text)
                 case .toolCall(let id, let toolName, let argumentsJSON):
                     toolCalls.append((id, toolName, argumentsJSON))
+                case .recordedToolCall(let id, let toolName, let argumentsJSON):
+                    let arguments = (try? GeneratedContent(json: argumentsJSON))
+                        ?? GeneratedContent(properties: [:])
+                    recordedCalls.append(Transcript.ToolCall(id: id, toolName: toolName, arguments: arguments))
+                case .recordedToolOutput(let id, let toolName, let outputText):
+                    recordedOutputs.append(Transcript.ToolOutput(
+                        id: id,
+                        toolName: toolName,
+                        segments: [.text(.init(content: outputText))]
+                    ))
                 }
             }
             try await executorTask.value
+
+            // Tool executions the executor already performed natively are
+            // recorded in the transcript without re-execution.
+            if !recordedCalls.isEmpty {
+                appendEntry(.toolCalls(Transcript.ToolCalls(calls: recordedCalls)))
+                for output in recordedOutputs {
+                    appendEntry(.toolOutput(output))
+                }
+            }
 
             if toolCalls.isEmpty {
                 return text
