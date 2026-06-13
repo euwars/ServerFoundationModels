@@ -35,7 +35,12 @@ let package = Package(
                     package: "async-http-client",
                     condition: .when(traits: ["AsyncHTTPClient"])
                 ),
-            ]
+            ],
+            swiftSettings: [.unsafeFlags([
+                "-enable-library-evolution",
+                "-emit-module-interface",
+                "-no-verify-emitted-module-interface",
+            ])]
         ),
         .macro(
             name: "ServerFoundationModelsMacros",
