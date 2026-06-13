@@ -1,5 +1,5 @@
 {
-  "originHash" : "e901ea27fe26c8ff651a554ef1ef57f79d8d5cbc64974dafd7dcc3838c665f67",
+  "originHash" : "5f7072ce95d2e28bd7b657025d0d2a2576a4ae695367e6e2061cc4f1ce40c778",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "a9a5efd40eaf558a2bcd48d64b1d1646be686008",
-        "version" : "1.7.1"
+        "revision" : "eb50cbd14606a9161cbc5d452f18797c90ef0bab",
+        "version" : "1.7.0"
       }
     },
     {
@@ -204,8 +204,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-system.git",
       "state" : {
-        "revision" : "7502b711c92a17741fa625d722b0ccbd595d8ed1",
-        "version" : "1.7.2"
+        "revision" : "666fba77fc401d8e63aa37435b1257fc88c40518",
+        "version" : "1.7.1"
       }
     }
   ],
