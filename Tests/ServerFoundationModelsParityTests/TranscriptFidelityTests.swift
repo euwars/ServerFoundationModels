@@ -113,11 +113,12 @@ struct TranscriptFidelityTests {
         #expect(tool.name == "paint")
         #expect(tool.description == "Paints things")
         // Schema round-trips as the same JSON Schema document (key order may
-        // differ, so compare parsed JSON).
-        try #expect(
-            jsonValue(tool.parameters.debugDescription)
-                == jsonValue(originalIns.toolDefinitions[0].parameters.debugDescription)
-        )
+        // differ, so compare parsed JSON). Evaluate the throwing conversions
+        // into locals first: #expect generates a non-throwing autoclosure, so
+        // a throwing call must not appear inside its condition.
+        let decodedSchema = try jsonValue(tool.parameters.debugDescription)
+        let originalSchema = try jsonValue(originalIns.toolDefinitions[0].parameters.debugDescription)
+        #expect(decodedSchema == originalSchema)
 
         // Prompt: id, segments (text + structure) with ids, options,
         // responseFormat, contextOptions.
