@@ -503,6 +503,15 @@ extension JSONNode {
 /// Streams an HTTP response body line by line. Darwin uses `URLSession.bytes`;
 /// Linux corelibs lacks it, so a data-delegate feeds an AsyncThrowingStream.
 enum HTTPLineStream {
+    /// Hoisted so SSE line splitting doesn't allocate a `CharacterSet` per line.
+    static let carriageReturn = CharacterSet(charactersIn: "\r")
+
+    /// Decodes one raw SSE line (without its terminating `\n`), stripping a
+    /// trailing `\r` from `\r\n` framing.
+    static func decodeLine(_ bytes: some Collection<UInt8>) -> String {
+        String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: carriageReturn)
+    }
+
     static func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
         #if AsyncHTTPClient
         return try await connectViaAsyncHTTPClient(request)
@@ -521,8 +530,7 @@ enum HTTPLineStream {
                 var buffer = [UInt8]()
                 for try await byte in bytes {
                     if byte == 0x0A {
-                        continuation.yield(String(decoding: buffer, as: UTF8.self)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                        continuation.yield(decodeLine(buffer))
                         buffer.removeAll(keepingCapacity: true)
                     } else {
                         buffer.append(byte)
@@ -718,10 +726,36 @@ final class LineStreamDelegate: @unchecked Sendable {
 import AsyncHTTPClient
 import NIOCore
 
+/// Process-global NIO HTTP client tuned for concurrent server-side model calls.
+///
+/// `HTTPClient.shared` caps HTTP/1 connections per host at 8, so a server firing
+/// many concurrent requests at one provider host queues behind that ceiling.
+/// This raises the soft limit. HTTP/2 (the default via `.automatic`) multiplexes
+/// over a single connection when the server offers it, so the higher limit only
+/// bites on HTTP/1 fallback. Held in a `static let` that lives for the process,
+/// so it is never deinited without shutdown (which AsyncHTTPClient would log).
+enum PooledHTTPClient {
+    static let shared: HTTPClient = {
+        var configuration = HTTPClient.Configuration()
+        configuration.httpVersion = .automatic
+        configuration.connectionPool.concurrentHTTP1ConnectionsPerHostSoftLimit = 50
+        configuration.connectionPool.idleTimeout = .seconds(90)
+        configuration.timeout.connect = .seconds(10)
+        return HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
+    }()
+}
+
 extension HTTPLineStream {
     /// NIO-based transport: pooled connections, concurrent-safe streaming.
     static func connectViaAsyncHTTPClient(
         _ request: URLRequest
+    ) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
+        try await Self.connect(request, using: PooledHTTPClient.shared)
+    }
+
+    private static func connect(
+        _ request: URLRequest,
+        using client: HTTPClient
     ) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
         guard let url = request.url else {
             throw LanguageModelTransportError(statusCode: 0, message: "request has no URL")
@@ -740,7 +774,7 @@ extension HTTPLineStream {
         // a total deadline for the whole request. Millisecond precision so
         // sub-second values are not truncated to 0.
         let timeout = TimeAmount.milliseconds(Int64((request.timeoutInterval * 1000).rounded()))
-        let response = try await HTTPClient.shared.execute(httpRequest, timeout: timeout)
+        let response = try await client.execute(httpRequest, timeout: timeout)
         guard let httpResponse = HTTPURLResponse(
             url: url, statusCode: Int(response.status.code), httpVersion: nil,
             headerFields: Dictionary(response.headers.map { ($0.name, $0.value) }, uniquingKeysWith: { first, _ in first })
@@ -754,11 +788,17 @@ extension HTTPLineStream {
             do {
                 for try await chunk in response.body {
                     buffer.append(contentsOf: chunk.readableBytesView)
-                    while let newline = buffer.firstIndex(of: 0x0A) {
-                        let lineData = buffer[buffer.startIndex..<newline]
-                        buffer.removeSubrange(buffer.startIndex...newline)
-                        continuation.yield(String(decoding: lineData, as: UTF8.self)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                    // Advance a cursor over the buffered bytes and compact the
+                    // consumed prefix once per chunk. Removing each line from the
+                    // front instead would re-shift the tail per line — O(n²) over
+                    // a chunk with many lines.
+                    var lineStart = buffer.startIndex
+                    while let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
+                        continuation.yield(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
+                        lineStart = buffer.index(after: newline)
+                    }
+                    if lineStart != buffer.startIndex {
+                        buffer.removeSubrange(buffer.startIndex..<lineStart)
                     }
                 }
                 if !buffer.isEmpty {

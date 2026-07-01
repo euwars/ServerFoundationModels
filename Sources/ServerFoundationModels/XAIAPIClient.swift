@@ -294,7 +294,7 @@ extension XAIHTTPClient {
             httpRequest.body = .bytes(ByteBuffer(bytes: body))
         }
         let timeout = TimeAmount.milliseconds(Int64((request.timeoutInterval * 1000).rounded()))
-        let response = try await HTTPClient.shared.execute(httpRequest, timeout: timeout)
+        let response = try await PooledHTTPClient.shared.execute(httpRequest, timeout: timeout)
         var data = Data()
         for try await chunk in response.body {
             data.append(contentsOf: chunk.readableBytesView)
