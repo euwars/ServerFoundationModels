@@ -20,4 +20,6 @@ linux_job_count() {
 SWIFT_JOBS="$(linux_job_count)"
 SWIFT_BUILD_FLAGS=(-j "$SWIFT_JOBS")
 # Unit tests are independent — run in parallel when supported.
-SWIFT_TEST_FLAGS=(-j "$SWIFT_JOBS" --parallel --parallel-worker-count "$SWIFT_JOBS")
+# `--parallel-worker-count` is not a valid `swift test` option in Swift 6.2;
+# `--parallel` alone parallelizes (swift-testing runs concurrently by default).
+SWIFT_TEST_FLAGS=(-j "$SWIFT_JOBS" --parallel)
