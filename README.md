@@ -136,6 +136,24 @@ See [docs/PRODUCTION.md](docs/PRODUCTION.md) for transports, transcript
 growth strategies, and timeout/retry policy, and the rest of
 [docs/](docs/) for the parity guarantees in detail.
 
+## Linux verification (container)
+
+Reproducible Linux checks (build, XAI unit tests, parity subset, optional
+live xAI probe) run inside the official `swift:6.2` image:
+
+```sh
+bash scripts/linux-container-verify.sh
+XAI_API_KEY=... bash scripts/linux-container-verify.sh   # includes live Grok probe
+```
+
+On a Linux host (or inside the container):
+
+```sh
+bash scripts/linux-verify.sh
+```
+
+CI runs the same XAI unit-test filter in the `linux` job (`.github/workflows/ci.yml`).
+
 ## Requirements
 
 - Swift 6.2+ (Linux: `swift:6.2` Docker image or newer)
