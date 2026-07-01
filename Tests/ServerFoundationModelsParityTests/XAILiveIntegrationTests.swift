@@ -62,4 +62,38 @@ struct XAILiveIntegrationTests {
             "expected prompt cache on turn 3, got cached=\(thirdUsage.input.cachedTokenCount)"
         )
     }
+
+    @Test(.enabled(if: Self.apiKey() != nil, "Set XAI_API_KEY to run live xAI tests"))
+    func grok43ServerToolSegmentCoverage() async throws {
+        let key = try #require(Self.apiKey())
+        let state = XAIConversationState()
+        let model = XAILanguageModel(
+            name: .grok4_3,
+            auth: .apiKey(key),
+            conversationState: state,
+            serverTools: XAILiveServerToolsScenario.serverTools,
+            timeout: XAILiveServerToolsScenario.timeout
+        )
+        let session = LanguageModelSession(
+            model: model,
+            instructions: XAILiveServerToolsScenario.instructions
+        )
+
+        var lastText = ""
+        for prompt in XAILiveServerToolsScenario.prompts {
+            let response = try await session.respond(to: prompt)
+            lastText = response.content
+        }
+        let inventory = XAIServerToolSegmentCollector.inventory(
+            transcript: session.transcript,
+            responseText: lastText
+        )
+
+        print("[xai-live] inventory: webSearch=\(inventory.webSearchCount) xSearch=\(inventory.xSearchCount) open_page=\(inventory.webFetchCount) citations=\(inventory.citationCount)")
+        for segment in XAIServerToolSegmentCollector.segments(in: session.transcript) {
+            print("[xai-live]  \(XAIServerToolSegmentCollector.describe(segment))")
+        }
+
+        #expect(inventory.isStrictPass, inventory.failureSummary ?? "strict segment coverage failed")
+    }
 }

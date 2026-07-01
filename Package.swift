@@ -11,6 +11,7 @@ let package = Package(
     products: [
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
         .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
+        .executable(name: "XAIServerToolsProbe", targets: ["XAIServerToolsProbe"]),
     ],
     traits: [
         // NIO-based HTTP transport (connection pooling; avoids corelibs
@@ -66,6 +67,11 @@ let package = Package(
             name: "XAILiveProbe",
             dependencies: ["ServerFoundationModels"],
             path: "integration/xai-live-probe"
+        ),
+        .executableTarget(
+            name: "XAIServerToolsProbe",
+            dependencies: ["ServerFoundationModels"],
+            path: "integration/xai-server-tools-probe"
         ),
         .testTarget(
             name: "ServerFoundationModelsParityTests",

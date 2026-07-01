@@ -9,6 +9,7 @@ enum XAIResponseTranslator {
         var rawOutput: Data?
         var toolCalls: [(id: String, name: String, arguments: String)]
         var usage: LanguageModelExecutorGenerationChannel.Usage?
+        var orderedEvents: [XAIServerToolWire.OrderedEvent]
     }
 
     static func parse(body: Data) throws -> Parsed {
@@ -17,24 +18,18 @@ enum XAIResponseTranslator {
             throw LanguageModelTransportError(statusCode: 0, message: "malformed xAI response JSON")
         }
 
+        var outputItems: [JSONNode] = []
         var textParts: [String] = []
         var toolCalls: [(id: String, name: String, arguments: String)] = []
 
-        if case .array(let outputItems) = root["output"] {
-            for item in outputItems {
+        if case .array(let items) = root["output"] {
+            outputItems = items
+            for item in items {
                 guard case .string(let type) = item["type"] else { continue }
                 switch type {
                 case "message":
-                    if case .array(let blocks) = item["content"] {
-                        for block in blocks {
-                            if case .string(let text) = block["text"], !text.isEmpty {
-                                textParts.append(text)
-                            }
-                        }
-                    }
-                    if case .string(let text) = item["text"], !text.isEmpty {
-                        textParts.append(text)
-                    }
+                    let messageText = XAIServerToolWire.messageText(from: item)
+                    if !messageText.isEmpty { textParts.append(messageText) }
                 case "function_call":
                     let id = stringValue(item["id"]) ?? stringValue(item["call_id"]) ?? UUID().uuidString
                     let name = stringValue(item["name"]) ?? ""
@@ -46,19 +41,31 @@ enum XAIResponseTranslator {
             }
         }
 
+        let citations = XAIServerToolWire.parseTopLevelCitations(from: root)
+        let orderedEvents = XAIServerToolWire.orderedEvents(
+            from: outputItems,
+            topLevelCitations: citations
+        )
+
         let usage = parseUsage(root["usage"])
         return Parsed(
             responseId: stringValue(root["id"]),
             text: textParts.joined(separator: "\n\n"),
             rawOutput: extractRawOutputField(from: body),
             toolCalls: toolCalls,
-            usage: usage
+            usage: usage,
+            orderedEvents: orderedEvents
         )
     }
 
     static func emit(_ parsed: Parsed, into channel: LanguageModelExecutorGenerationChannel) async {
-        if !parsed.text.isEmpty {
-            await channel.send(.response(action: .appendText(parsed.text, tokenCount: 0)))
+        for event in parsed.orderedEvents {
+            switch event.kind {
+            case .customSegment(let segment):
+                await channel.send(.response(action: .updateCustomSegment(segment)))
+            case .appendText(let text):
+                await channel.send(.response(action: .appendText(text, tokenCount: 0)))
+            }
         }
         for call in parsed.toolCalls {
             await channel.send(.toolCalls(action: .toolCall(

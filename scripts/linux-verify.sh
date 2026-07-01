@@ -22,7 +22,7 @@ echo "=== Parallel jobs: $SWIFT_JOBS (override with SWIFT_BUILD_JOBS) ==="
 
 pass() { echo "OK: $1"; }
 
-XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAISchemaHelpersTests'
+XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests'
 PARITY_FILTER='APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
 
 if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then
@@ -60,8 +60,13 @@ if [[ -n "${XAI_API_KEY:-}" ]]; then
   swift run -c release "${SWIFT_BUILD_FLAGS[@]}" XAILiveProbe | tee /tmp/xai-live.log
   grep -q "RESULT: PASS" /tmp/xai-live.log
   pass "XAILiveProbe live (grok-4.3)"
+
+  echo "--- live xAI server-tools probe (strict segment + citation coverage) ---"
+  swift run -c release "${SWIFT_BUILD_FLAGS[@]}" XAIServerToolsProbe | tee /tmp/xai-server-tools.log
+  grep -q "RESULT: PASS" /tmp/xai-server-tools.log
+  pass "XAIServerToolsProbe live (webSearch, xSearch, open_page, citations)"
 else
-  echo "SKIP: XAILiveProbe (set XAI_API_KEY to run live xAI verification)"
+  echo "SKIP: XAILiveProbe / XAIServerToolsProbe (set XAI_API_KEY to run live xAI verification)"
 fi
 
 echo "=== Linux verify: ALL CHECKS PASSED ==="

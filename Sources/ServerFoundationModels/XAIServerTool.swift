@@ -6,7 +6,7 @@ public enum XAIServerTool: Hashable, Sendable {
     case webSearch
     case xSearch
 
-    var wireType: String {
+    public var wireType: String {
         switch self {
         case .webSearch: "web_search"
         case .xSearch: "x_search"

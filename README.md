@@ -92,6 +92,27 @@ Use one `XAIConversationState` per `LanguageModelSession`. Multi-agent
 models (`.grok4_20MultiAgent`) are supported but not threadable via
 `previous_response_id` — the executor replays stored output items instead.
 
+With `serverTools` enabled, search/page/citation activity surfaces in the
+transcript as `XAIServerToolSegment` custom segments (Apple's Beta 2
+`Transcript.CustomSegment` pattern):
+
+```swift
+for entry in session.transcript {
+    guard case .response(let response) = entry else { continue }
+    for segment in response.segments {
+        if case .custom(let custom) = segment,
+           let activity = custom as? XAIServerToolSegment
+        {
+            switch activity.content {
+            case .webSearch(let search): print(search.query, search.outcome?.citations ?? [])
+            case .webFetch(let fetch): print(fetch.url)
+            default: break
+            }
+        }
+    }
+}
+```
+
 ## How parity is proven
 
 The claim "just replace the import" is enforced by five independent gates,

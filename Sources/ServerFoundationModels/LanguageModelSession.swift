@@ -262,7 +262,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                 onCumulativeText: nil
             )
 
-            let responseEntry = Transcript.Response(segments: [.text(.init(content: result.finalRoundText))])
+            let responseEntry = Transcript.Response(
+                segments: transcriptResponseSegments(from: result)
+            )
             appendEntry(.response(responseEntry))
             try await notifyResponse(responseEntry)
             return Response(
@@ -326,7 +328,10 @@ public final class LanguageModelSession: @unchecked Sendable {
             let content = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
 
             let responseEntry = Transcript.Response(
-                segments: [.structure(.init(content: content))]
+                segments: transcriptResponseSegments(
+                    from: result,
+                    replacingTextWith: .structure(.init(content: content))
+                )
             )
             appendEntry(.response(responseEntry))
             try await notifyResponse(responseEntry)
@@ -400,7 +405,10 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             let responseEntry = Transcript.Response(
-                segments: [.structure(.init(content: raw))]
+                segments: transcriptResponseSegments(
+                    from: result,
+                    replacingTextWith: .structure(.init(content: raw))
+                )
             )
             appendEntry(.response(responseEntry))
             try await notifyResponse(responseEntry)
@@ -445,7 +453,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                         ))
                     }
 
-                    let responseEntry = Transcript.Response(segments: [.text(.init(content: result.finalRoundText))])
+                    let responseEntry = Transcript.Response(
+                        segments: transcriptResponseSegments(from: result)
+                    )
                     appendEntry(.response(responseEntry))
                     try await notifyResponse(responseEntry)
                     continuation.yield(ResponseStream<String>.Snapshot(
@@ -539,7 +549,10 @@ public final class LanguageModelSession: @unchecked Sendable {
                         ))
                     }
                     let responseEntry = Transcript.Response(
-                        segments: [.structure(.init(content: raw))]
+                        segments: transcriptResponseSegments(
+                            from: result,
+                            replacingTextWith: .structure(.init(content: raw))
+                        )
                     )
                     appendEntry(.response(responseEntry))
                     try await notifyResponse(responseEntry)
@@ -749,7 +762,12 @@ public final class LanguageModelSession: @unchecked Sendable {
                         }
                     }
                     let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
-                    let responseEntry = Transcript.Response(segments: [.structure(.init(content: raw))])
+                    let responseEntry = Transcript.Response(
+                        segments: transcriptResponseSegments(
+                            from: result,
+                            replacingTextWith: .structure(.init(content: raw))
+                        )
+                    )
                     appendEntry(.response(responseEntry))
                     try await notifyResponse(responseEntry)
                     continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
@@ -867,7 +885,32 @@ public final class LanguageModelSession: @unchecked Sendable {
         var text: String
         /// Text of the final round only — what structured paths decode.
         var finalRoundText: String
+        /// Ordered response segments from the final round (custom server-tool
+        /// activity interleaved with text), when the executor emitted them.
+        var responseSegments: [Transcript.Segment]
         var usage: Usage
+    }
+
+    /// Builds transcript response segments, preferring the executor's ordered
+    /// segment list and optionally replacing trailing text with structured content.
+    private func transcriptResponseSegments(
+        from result: LoopResult,
+        replacingTextWith replacement: Transcript.Segment? = nil
+    ) -> [Transcript.Segment] {
+        var segments = result.responseSegments
+        if let replacement {
+            if let lastText = segments.indices.last, case .text = segments[lastText] {
+                segments[lastText] = replacement
+            } else {
+                segments.append(replacement)
+            }
+            return segments
+        }
+        if !segments.isEmpty { return segments }
+        if !result.finalRoundText.isEmpty {
+            return [.text(.init(content: result.finalRoundText))]
+        }
+        return []
     }
 
     /// Resolves the dynamic profile for a new prompt, persisting its history
@@ -1030,6 +1073,27 @@ public final class LanguageModelSession: @unchecked Sendable {
             var toolCallAccumulator: [String: (name: String, argumentsJSON: String)] = [:]
             var recordedCalls: [Transcript.ToolCall] = []
             var recordedOutputs: [Transcript.ToolOutput] = []
+            var responseSegments: [Transcript.Segment] = []
+            var customSegmentIndices: [String: Int] = [:]
+
+            func upsertCustomSegment(_ segment: any Transcript.CustomSegment) {
+                if let index = customSegmentIndices[segment.id] {
+                    responseSegments[index] = .custom(segment)
+                } else {
+                    customSegmentIndices[segment.id] = responseSegments.count
+                    responseSegments.append(.custom(segment))
+                }
+            }
+
+            func appendResponseText(_ fragment: String) {
+                guard !fragment.isEmpty else { return }
+                if case .text(var existing) = responseSegments.last {
+                    existing.content += fragment
+                    responseSegments[responseSegments.count - 1] = .text(existing)
+                } else {
+                    responseSegments.append(.text(.init(content: fragment)))
+                }
+            }
 
             // Streamed usage reports are running totals: the latest report
             // for the round wins; rounds add together for the turn.
@@ -1046,13 +1110,22 @@ public final class LanguageModelSession: @unchecked Sendable {
                     switch response.action {
                     case .appendText(let fragment):
                         text += fragment.content
+                        appendResponseText(fragment.content)
                         onCumulativeText?(joinedRounds(completedRoundsText, text), text)
                     case .replaceTextSegment(let replacement):
                         text = replacement.content
+                        if case .text(var existing) = responseSegments.last {
+                            existing.content = replacement.content
+                            responseSegments[responseSegments.count - 1] = .text(existing)
+                        } else {
+                            responseSegments.append(.text(.init(content: replacement.content)))
+                        }
                         onCumulativeText?(joinedRounds(completedRoundsText, text), text)
+                    case .updateCustomSegment(let segment):
+                        upsertCustomSegment(segment)
                     case .updateUsage(let reported):
                         accumulate(reported)
-                    case .updateCustomSegment, .addAttachmentSegment, .removeAttachmentSegment, .updateMetadata:
+                    case .addAttachmentSegment, .removeAttachmentSegment, .updateMetadata:
                         break
                     }
                 case let reasoningEvent as LanguageModelExecutorGenerationChannel.Reasoning:
@@ -1147,16 +1220,18 @@ public final class LanguageModelSession: @unchecked Sendable {
                 return LoopResult(
                     text: joinedRounds(completedRoundsText, text),
                     finalRoundText: text,
+                    responseSegments: responseSegments,
                     usage: turnUsage
                 )
             }
 
             // Assistant text that preceded the tool calls is part of the
             // durable record: persist it ahead of the calls it led to.
-            if !text.isEmpty {
-                appendEntry(.response(Transcript.Response(
-                    segments: [.text(.init(content: text))]
-                )))
+            if !responseSegments.isEmpty || !text.isEmpty {
+                let segments = !responseSegments.isEmpty
+                    ? responseSegments
+                    : [.text(.init(content: text))]
+                appendEntry(.response(Transcript.Response(segments: segments)))
                 completedRoundsText = joinedRounds(completedRoundsText, text)
             }
 
