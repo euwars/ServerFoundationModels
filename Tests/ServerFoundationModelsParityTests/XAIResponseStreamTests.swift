@@ -76,6 +76,29 @@ import Testing
         #expect(segments[0].outcomeCitationCount == 0)
         #expect(segments[1].outcomeCitationCount == 2)
     }
+
+    // Regression: the function name lives on the `function_call` output item,
+    // not on `function_call_arguments.done`, so a streamed client tool call must
+    // still surface with its name (else the tool loop silently drops it).
+    @Test func streamingCapturesClientFunctionCall() throws {
+        var acc = XAIResponseStream.Accumulator()
+        _ = try acc.ingest(payload: """
+        {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"getWeather","arguments":""}}
+        """)
+        _ = try acc.ingest(payload: """
+        {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\\"city\\":\\"Tokyo\\"}"}
+        """)
+        let completed = """
+        {"type":"response.completed","response":{"id":"r1","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"getWeather","arguments":"{\\"city\\":\\"Tokyo\\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}}
+        """
+        let actions = try acc.ingest(payload: completed)
+        let call = actions.compactMap { action -> (name: String, args: String)? in
+            if case .toolCall(_, let name, let args) = action { return (name, args) }
+            return nil
+        }.first
+        #expect(call?.name == "getWeather")
+        #expect(call?.args.contains("Tokyo") == true)
+    }
 }
 
 private extension XAIServerToolSegment {

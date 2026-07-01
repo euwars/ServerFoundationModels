@@ -208,10 +208,24 @@ enum XAIResponseStream {
                 actions.append(contentsOf: distribute(inlineCitations))
             }
 
-            toolCalls = functionCallArgs.values
-                .sorted { $0.id < $1.id }
-                .map { (id: $0.id, name: $0.name, arguments: $0.arguments) }
-            for call in toolCalls where !call.name.isEmpty {
+            // Client function calls carry their name on the `function_call` output
+            // item, not on the `function_call_arguments.done` event, so build them
+            // from the output items (matching the non-streaming translator). Fall
+            // back to streamed argument deltas when the item omits `arguments`.
+            var collected: [(id: String, name: String, arguments: String)] = []
+            for item in outputItems {
+                guard case .string(let type) = item["type"], type == "function_call" else { continue }
+                let id = XAIServerToolWire.stringValue(item["id"])
+                    ?? XAIServerToolWire.stringValue(item["call_id"])
+                    ?? UUID().uuidString
+                guard let name = XAIServerToolWire.stringValue(item["name"]), !name.isEmpty else { continue }
+                let arguments = XAIServerToolWire.stringValue(item["arguments"])
+                    ?? functionCallArgs[id]?.arguments
+                    ?? "{}"
+                collected.append((id: id, name: name, arguments: arguments))
+            }
+            toolCalls = collected
+            for call in collected {
                 actions.append(.toolCall(id: call.id, name: call.name, arguments: call.arguments))
             }
 

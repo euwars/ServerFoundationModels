@@ -33,7 +33,14 @@ import Testing
         #expect(parsed.toolCalls[0].name == "fetchWeather")
         #expect(parsed.usage?.input.cachedTokenCount == 80)
         #expect(parsed.usage?.input.totalTokenCount == 100)
-        #expect(parsed.orderedEvents.isEmpty)
+        // The channel receives text via orderedEvents' appendText (there is no
+        // separate parsed.text emission), so the message text appears here.
+        #expect(parsed.orderedEvents.count == 1)
+        if case .appendText(let text) = parsed.orderedEvents.first?.kind {
+            #expect(text == "Hello from Grok")
+        } else {
+            Issue.record("expected an appendText ordered event for the message text")
+        }
     }
 
     @Test func emitDeliversCustomSegmentsBeforeText() async throws {
