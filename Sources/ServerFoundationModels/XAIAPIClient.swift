@@ -281,11 +281,11 @@ final class DataStreamDelegate: @unchecked Sendable {
                 statusCode: 0, message: "connection closed before a response arrived"
             ))
         }
-        if let continuation {
+        if let bodyContinuation {
             if let error {
-                continuation.resume(throwing: error)
+                bodyContinuation.resume(throwing: error)
             } else {
-                continuation.resume(returning: body)
+                bodyContinuation.resume(returning: body)
             }
         }
     }
