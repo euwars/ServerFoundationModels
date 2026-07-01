@@ -15,6 +15,22 @@ Sessions, `@Generable`/`@Guide` macros, guided generation, tools, streaming,
 transcripts, profiles, dynamic instructions — the complete SDK 27 public
 API, verified signature-for-signature against Apple's interface.
 
+### Why it's good
+
+- **Drop-in.** The full FoundationModels SDK 27 surface, verified
+  signature-for-signature (**0 gaps**). Swap the import; your code, macros, and
+  tools compile unchanged.
+- **Runs anywhere.** Linux, servers, containers — concurrency-stress- and
+  soak-tested, and proven inside Vapor and Hummingbird handlers.
+- **Real providers.** Any OpenAI-compatible endpoint (`ChatCompletionsLanguageModel`)
+  and a native **xAI Grok** provider (`XAILanguageModel`) with server-side web/X
+  search, `previous_response_id` threading, and prompt-prefix caching.
+- **Skills.** Let the model activate capability bundles (instructions + tools)
+  on demand, mid-session, by calling an auto-generated tool.
+- **Multi-agent ready.** Independent `Sendable` sessions over a pooled NIO client
+  make code-orchestrated fan-out (plan → research → verify → synthesize) trivial —
+  a live deep-research example ships in [`integration/`](integration/xai-deep-research/main.swift).
+
 ## Installation
 
 ```swift
@@ -277,6 +293,69 @@ default, never logs prompt or response content):
 var model = XAILanguageModel(name: .grok4_3, auth: .apiKey(key))
 model.logger = Logger(label: "xai")
 ```
+
+## Skills
+
+Give the model capability bundles it can turn on and off *itself*. A `Skill`
+pairs a model-visible name and description with an instructions-and-tools payload
+(or a one-shot prompt). `Skills` lists them and generates a tool the model calls
+to toggle them — so the model reconfigures itself mid-session.
+
+```swift
+struct AssistantProfile: LanguageModelSession.DynamicProfile {
+    let activations: SkillActivations
+    let key: String
+    var body: some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.Profile {
+            Skills(activations: activations) {
+                Skill(name: "style-guide", description: "Apply the writing style guide") {
+                    "Keep phrasing literal; avoid idioms."      // prompt-based: preserves the prefix cache
+                }
+                Skill(name: "calendaring", description: "Read and modify the calendar",
+                      allowsDeactivation: true) {
+                    Instructions("Meetings start 5 minutes after the hour.")
+                    // …plus this skill's own tools
+                }
+            }
+        }
+        .model(XAILanguageModel(name: .grok4_3, auth: .apiKey(key)))
+    }
+}
+
+let session = LanguageModelSession(profile: AssistantProfile(activations: SkillActivations(), key: key))
+```
+
+When the model calls the generated `toggle_skill` tool, the skill's instructions
+and tools are injected on the next round. Prompt-based skills attach as tool
+output (cache-friendly); instructions-based skills raise priority at the cost of
+a prompt-cache invalidation. Ported from `apple/foundation-models-utilities` and
+adapted to the core API.
+
+## Multi-agent deep research
+
+Independent sessions are `Sendable` and share a pooled NIO client, so
+*code-orchestrated* fan-out is trivial — and far more predictable than asking one
+model to drive everything (known work-list → `withTaskGroup`; only reach for
+tools when the model must decide what to invoke mid-reasoning). A complete,
+runnable example ships in
+[`integration/xai-deep-research`](integration/xai-deep-research/main.swift):
+**Plan → parallel Research → adversarial Verify → Synthesize**.
+
+```sh
+XAI_API_KEY=… swift run XAIDeepResearchProbe "Compare vLLM, TGI, and llama.cpp in 2026"
+```
+
+```
+Stage 1 PLAN:                 9.4s   → 4 research angles
+Stages 2+3 RESEARCH+VERIFY:  62.7s   parallel   vs 221.8s serial   (3.5× via fan-out)
+  ✗ DROPPED  key features             ← the verifier rejected an unsupported claim
+Stage 4 SYNTHESIZE:          23.8s   → cited report
+TOTAL:                       95.9s   (1 plan + 4 research + 4 verify + 1 synth)
+```
+
+Each stage tunes its own model and reasoning effort (wide + cheap to gather,
+deep + skeptical to trust), passes typed `@Generable` data between stages, and
+pipelines research → verify per angle so a slow verify never blocks the others.
 
 ## How parity is proven
 
