@@ -138,19 +138,28 @@ growth strategies, and timeout/retry policy, and the rest of
 
 ## Linux verification (container)
 
-Reproducible Linux checks (build, XAI unit tests, parity subset, optional
-live xAI probe) run inside the official `swift:6.2` image:
+Reproducible Linux checks run inside the official `swift:6.2` image. The
+container wrapper keeps a **persistent `.build` volume** and bind-mounts your
+repo directly (no `cp -a` copy) so the second run is much faster on macOS /
+OrbStack:
 
 ```sh
+# Full verify (first run ~5–10 min cold; warm ~1–2 min)
 bash scripts/linux-container-verify.sh
-XAI_API_KEY=... bash scripts/linux-container-verify.sh   # includes live Grok probe
+
+# Fast dev loop — debug build + XAI unit tests only
+LINUX_VERIFY_QUICK=1 bash scripts/linux-container-verify.sh
+
+# Interactive shell with warm cache
+bash scripts/linux-container-shell.sh
+bash scripts/linux-container-shell.sh swift test --filter XAIWireFormatTests
+
+# Optional: pre-warm dependency layers into a custom image
+docker build -f docker/linux-verify/Dockerfile.deps -t sfm-linux-deps .
+LINUX_VERIFY_IMAGE=sfm-linux-deps bash scripts/linux-container-verify.sh
 ```
 
-On a Linux host (or inside the container):
-
-```sh
-bash scripts/linux-verify.sh
-```
+On a Linux host (or inside the container): `bash scripts/linux-verify.sh`
 
 CI runs the same XAI unit-test filter in the `linux` job (`.github/workflows/ci.yml`).
 

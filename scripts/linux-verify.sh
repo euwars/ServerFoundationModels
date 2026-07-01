@@ -4,9 +4,10 @@
 #
 # Usage (from repo root):
 #   bash scripts/linux-verify.sh
-#   XAI_API_KEY=... bash scripts/linux-verify.sh   # also runs live xAI probe
+#   LINUX_VERIFY_QUICK=1 bash scripts/linux-verify.sh
+#   XAI_API_KEY=... bash scripts/linux-verify.sh
 #
-# From macOS/host via Docker:
+# From macOS/host via Docker (recommended — persistent .build volume):
 #   bash scripts/linux-container-verify.sh
 set -euo pipefail
 
@@ -21,16 +22,26 @@ pass() { echo "OK: $1"; }
 XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAISchemaHelpersTests'
 PARITY_FILTER='APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
 
-echo "--- build library (NIO transport, default traits) ---"
-swift build -c release
+if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then
+  echo "--- QUICK: debug build + XAI unit tests ---"
+  swift build --build-tests
+  pass "debug build"
+  swift test --filter "$XAI_FILTER"
+  pass "XAI unit tests"
+  echo "=== Linux verify (quick): PASSED ==="
+  exit 0
+fi
+
+echo "--- build library + tests (release, NIO transport) ---"
+swift build -c release --build-tests
 pass "release build (AsyncHTTPClient)"
 
-echo "--- build XAILiveProbe ---"
+echo "--- build XAILiveProbe (release) ---"
 swift build -c release --product XAILiveProbe
 pass "XAILiveProbe release build"
 
-echo "--- XAI unit tests (wire format, threading, inline replay) ---"
-swift test --filter "$XAI_FILTER"
+echo "--- XAI unit tests ---"
+swift test -c release --filter "$XAI_FILTER"
 pass "XAI unit tests"
 
 echo "--- build library (URLSession transport, traits disabled) ---"
@@ -38,7 +49,7 @@ swift build -c release --disable-default-traits
 pass "release build (URLSession / no AsyncHTTPClient)"
 
 echo "--- core parity subset (model-free) ---"
-swift test --filter "$PARITY_FILTER"
+swift test -c release --filter "$PARITY_FILTER"
 pass "parity subset tests"
 
 if [[ -n "${XAI_API_KEY:-}" ]]; then

@@ -1,0 +1,22 @@
+# Pre-warm SwiftPM dependency resolution for faster first container build.
+# Build once:  docker build -f docker/linux-verify/Dockerfile.deps -t sfm-linux-deps .
+# Use:         LINUX_VERIFY_IMAGE=sfm-linux-deps bash scripts/linux-container-verify.sh
+#
+# Layers Package.swift + Package.resolved + macro sources so `swift package resolve`
+# and the heaviest dependency compiles are cached in the image. Your bind-mounted
+# sources still drive incremental rebuilds on top.
+
+FROM swift:6.2
+
+WORKDIR /work
+
+COPY Package.swift Package.resolved ./
+COPY Sources/ServerFoundationModelsMacros ./Sources/ServerFoundationModelsMacros
+
+# Resolve and compile macro target + fetch all remote packages into the image layer.
+RUN swift package resolve \
+ && swift build -c release --target ServerFoundationModelsMacros
+
+# Sources are bind-mounted at run time; default CMD is a quick verify.
+COPY scripts/linux-verify.sh scripts/linux-container-verify.sh ./scripts/
+CMD ["bash", "scripts/linux-verify.sh"]
