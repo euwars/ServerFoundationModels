@@ -105,14 +105,14 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             )
 
             do {
-                let parsed = try await postAndParse(
+                let parsed = try await streamAndParse(
                     built.request,
                     auth: configuration.auth,
                     baseURL: configuration.baseURL,
                     timeout: configuration.timeout,
+                    channel: channel,
                     logger: logger
                 )
-                await XAIResponseTranslator.emit(parsed, into: channel)
                 model.conversationState.recordExecutorSuccess(
                     responseId: parsed.responseId,
                     rawOutput: parsed.rawOutput,
@@ -142,33 +142,80 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             return false
         }
 
-        private func postAndParse(
+        private func streamAndParse(
             _ body: XAIResponsesRequest,
             auth: XAIAuthMode,
             baseURL: URL,
             timeout: TimeInterval,
+            channel: LanguageModelExecutorGenerationChannel,
             logger: Logger
         ) async throws -> XAIResponseTranslator.Parsed {
             var urlRequest = URLRequest(url: baseURL)
             urlRequest.httpMethod = "POST"
             urlRequest.timeoutInterval = timeout
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+            urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             applyAuth(auth, to: &urlRequest)
-            urlRequest.httpBody = try body.bodyJSON()
+            var streamingBody = body
+            streamingBody.stream = true
+            urlRequest.httpBody = try streamingBody.bodyJSON()
 
-            let response = try await XAIHTTPClient.post(urlRequest, logger: logger)
-            let responseBody = String(data: response.data, encoding: .utf8) ?? ""
+            let (lines, response) = try await HTTPLineStream.connect(urlRequest)
+            let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
 
-            guard response.statusCode < 400 else {
+            if response.statusCode >= 400 || contentType.contains("application/json") {
+                var responseBody = ""
+                for try await line in lines {
+                    responseBody += line
+                    if responseBody.count > 8192 { break }
+                }
                 logger.warning("xai.responses error", metadata: [
                     "status": .stringConvertible(response.statusCode),
                     "body": .string(String(responseBody.prefix(256))),
                 ])
+                if response.statusCode < 400, !responseBody.isEmpty {
+                    let parsed = try XAIResponseTranslator.parse(body: Data(responseBody.utf8))
+                    await XAIResponseTranslator.emit(parsed, into: channel)
+                    return parsed
+                }
                 throw XAIError(status: response.statusCode, body: responseBody)
             }
 
-            return try XAIResponseTranslator.parse(body: response.data)
+            var accumulator = XAIResponseStream.Accumulator()
+            var pendingData: [String] = []
+            var isFirstLine = true
+
+            for try await rawLine in lines {
+                var line = Substring(rawLine)
+                if isFirstLine {
+                    isFirstLine = false
+                    if line.first == "\u{FEFF}" { line.removeFirst() }
+                }
+                if line.isEmpty {
+                    guard !pendingData.isEmpty else { continue }
+                    let payload = pendingData.joined(separator: "\n")
+                    pendingData.removeAll()
+                    let actions = try accumulator.ingest(payload: payload)
+                    for action in actions {
+                        await XAIResponseStream.emit(action, into: channel)
+                    }
+                    if accumulator.isTerminal { break }
+                    continue
+                }
+                guard line.hasPrefix("data:") else { continue }
+                var value = line.dropFirst(5)
+                if value.first == " " { value.removeFirst() }
+                pendingData.append(String(value))
+            }
+
+            if !pendingData.isEmpty {
+                let actions = try accumulator.ingest(payload: pendingData.joined(separator: "\n"))
+                for action in actions {
+                    await XAIResponseStream.emit(action, into: channel)
+                }
+            }
+
+            return accumulator.finish()
         }
 
         private func applyAuth(_ auth: XAIAuthMode, to request: inout URLRequest) {

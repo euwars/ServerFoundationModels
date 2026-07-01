@@ -14,7 +14,7 @@ import Testing
             XAIServerToolSegment(
                 id: "s",
                 content: .webFetch(.init(url: URL(string: "https://example.com")!))
-            ).toolName == "web_search"
+            ).toolName == "open_page"
         )
     }
 

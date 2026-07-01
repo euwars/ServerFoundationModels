@@ -30,18 +30,16 @@ enum XAIServerToolWire {
             }
         }
 
-        func mergeCitationsIntoSearchSegments(_ citations: [XAIServerToolSegment.Citation]) {
-            guard !citations.isEmpty else { return }
-            for id in searchSegmentIDs {
-                guard let segment = segmentsByID[id] else { continue }
-                switch segment.content {
-                case .webSearch, .xSearch:
-                    upsertSearch(id: id) { content in
-                        mergeCitations(into: content, citations: citations)
-                    }
-                default:
-                    break
+        func mergeCitationsIntoLastSearchSegment(_ citations: [XAIServerToolSegment.Citation]) {
+            guard !citations.isEmpty, let id = searchSegmentIDs.last else { return }
+            guard let segment = segmentsByID[id] else { return }
+            switch segment.content {
+            case .webSearch, .xSearch:
+                upsertSearch(id: id) { content in
+                    mergeCitations(into: content, citations: citations)
                 }
+            default:
+                break
             }
         }
 
@@ -63,54 +61,11 @@ enum XAIServerToolWire {
         for item in outputItems {
             guard case .string(let type) = item["type"] else { continue }
             switch type {
-            case "web_search_call":
-                let id = stringValue(item["id"]) ?? UUID().uuidString
-                let status = stringValue(item["status"])
-                if let fetch = pageFetch(from: item, status: status) {
-                    emit(fetch)
-                } else if let query = stringValue(item["action"]?["query"]) {
-                    let hits = searchHits(from: item)
-                    let outcome = searchOutcome(status: status, hits: hits)
-                    let segment = XAIServerToolSegment(
-                        id: id,
-                        content: .webSearch(.init(query: query, status: status, outcome: outcome))
-                    )
+            case "web_search_call", "x_search_call", "custom_tool_call":
+                if let segment = serverToolSegment(from: item) {
                     emit(segment)
-                    trackSearchSegment(id: id)
-                } else {
-                    emit(unrecognized(item, type: type))
-                }
-
-            case "x_search_call":
-                let id = stringValue(item["id"]) ?? UUID().uuidString
-                let status = stringValue(item["status"])
-                if let fetch = pageFetch(from: item, status: status) {
-                    emit(fetch)
-                } else if let query = stringValue(item["action"]?["query"]) {
-                    let hits = searchHits(from: item)
-                    let outcome = searchOutcome(status: status, hits: hits)
-                    let segment = XAIServerToolSegment(
-                        id: id,
-                        content: .xSearch(.init(query: query, status: status, outcome: outcome))
-                    )
-                    emit(segment)
-                    trackSearchSegment(id: id)
-                } else {
-                    emit(unrecognized(item, type: type))
-                }
-
-            case "custom_tool_call":
-                let id = stringValue(item["id"]) ?? UUID().uuidString
-                let status = stringValue(item["status"])
-                let name = stringValue(item["name"]) ?? ""
-                let inputJSON = stringValue(item["input"]) ?? "{}"
-                if let segment = customToolSegment(id: id, name: name, inputJSON: inputJSON, status: status) {
-                    emit(segment)
-                    switch segment.content {
-                    case .webSearch, .xSearch:
-                        trackSearchSegment(id: id)
-                    default:
-                        break
+                    if isSearchSegment(segment) {
+                        trackSearchSegment(id: segment.id)
                     }
                 } else {
                     emit(unrecognized(item, type: type))
@@ -121,16 +76,69 @@ enum XAIServerToolWire {
                 if !text.isEmpty {
                     events.append(.init(kind: .appendText(text)))
                 }
-                mergeCitationsIntoSearchSegments(annotations(from: item))
+                mergeCitationsIntoLastSearchSegment(annotations(from: item))
 
             default:
                 break
             }
         }
 
-        mergeCitationsIntoSearchSegments(topLevelCitations)
+        mergeCitationsIntoLastSearchSegment(topLevelCitations)
 
         return events
+    }
+
+    /// Maps one Responses API output item to a server-tool segment when recognized.
+    static func serverToolSegment(from item: JSONNode) -> XAIServerToolSegment? {
+        guard case .string(let type) = item["type"] else { return nil }
+        let id = stringValue(item["id"]) ?? UUID().uuidString
+        let status = stringValue(item["status"])
+        switch type {
+        case "web_search_call":
+            if let fetch = pageFetch(from: item, status: status) {
+                return fetch
+            }
+            if let query = stringValue(item["action"]?["query"]) {
+                let hits = searchHits(from: item)
+                let outcome = searchOutcome(status: status, hits: hits)
+                return .init(id: id, content: .webSearch(.init(query: query, status: status, outcome: outcome)))
+            }
+            return nil
+
+        case "x_search_call":
+            if let fetch = pageFetch(from: item, status: status) {
+                return fetch
+            }
+            if let query = stringValue(item["action"]?["query"]) {
+                let hits = searchHits(from: item)
+                let outcome = searchOutcome(status: status, hits: hits)
+                return .init(id: id, content: .xSearch(.init(query: query, status: status, outcome: outcome)))
+            }
+            return nil
+
+        case "custom_tool_call":
+            let name = stringValue(item["name"]) ?? ""
+            let inputJSON = stringValue(item["input"]) ?? "{}"
+            return customToolSegment(id: id, name: name, inputJSON: inputJSON, status: status)
+
+        default:
+            return nil
+        }
+    }
+
+    static func isSearchSegment(_ segment: XAIServerToolSegment) -> Bool {
+        switch segment.content {
+        case .webSearch, .xSearch: true
+        default: false
+        }
+    }
+
+    static func mergeCitations(
+        into segment: XAIServerToolSegment,
+        citations: [XAIServerToolSegment.Citation]
+    ) -> XAIServerToolSegment {
+        guard !citations.isEmpty else { return segment }
+        return .init(id: segment.id, content: mergeCitations(into: segment.content, citations: citations))
     }
 
     private static func searchOutcome(
@@ -243,7 +251,7 @@ enum XAIServerToolWire {
         return parts.joined(separator: "\n\n")
     }
 
-    private static func annotations(from item: JSONNode) -> [XAIServerToolSegment.Citation] {
+    static func annotations(from item: JSONNode) -> [XAIServerToolSegment.Citation] {
         var citations: [XAIServerToolSegment.Citation] = []
         func collect(from blocks: [JSONNode]) {
             for block in blocks {
@@ -277,6 +285,10 @@ enum XAIServerToolWire {
             }
             return nil
         }
+    }
+
+    static func parseCitation(from annotation: JSONNode) -> XAIServerToolSegment.Citation? {
+        parseCitations([annotation]).first
     }
 
     private static func parseCitations(_ nodes: [JSONNode]) -> [XAIServerToolSegment.Citation] {
@@ -335,14 +347,32 @@ enum XAIServerToolWire {
         return .init(id: id, content: .unrecognized(.init(itemType: type, wireJSON: item.serialized)))
     }
 
-    private static func stringValue(_ node: JSONNode?) -> String? {
+    static func stringValue(_ node: JSONNode?) -> String? {
         if case .string(let value) = node { return value }
         return nil
     }
 
-    private static func intValue(_ node: JSONNode?) -> Int? {
+    static func intValue(_ node: JSONNode?) -> Int? {
         if case .integer(let value) = node { return value }
         if case .number(let value) = node, let exact = Int(exactly: value) { return exact }
         return nil
+    }
+
+    static func itemID(from event: JSONNode) -> String? {
+        stringValue(event["item_id"]) ?? stringValue(event["item"]?["id"])
+    }
+
+    static func outputIndex(from event: JSONNode) -> Int? {
+        intValue(event["output_index"])
+    }
+
+    static func settingObjectField(_ item: JSONNode, key: String, value: JSONNode) -> JSONNode {
+        guard case .object(var members) = item else { return item }
+        if let index = members.firstIndex(where: { $0.key == key }) {
+            members[index].value = value
+        } else {
+            members.append(.init(key: key, value: value))
+        }
+        return .object(members)
     }
 }

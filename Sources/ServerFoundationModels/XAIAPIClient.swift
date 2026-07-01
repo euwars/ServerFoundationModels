@@ -19,6 +19,8 @@ struct XAIResponsesRequest: Sendable {
     var temperature: Double?
     var maxOutputTokens: Int?
     var promptCacheKey: String?
+    var stream: Bool = true
+    var include: [String] = []
 
     func bodyJSON() throws -> Data {
         Data(serialize().utf8)
@@ -63,6 +65,12 @@ struct XAIResponsesRequest: Sendable {
         }
         if let promptCacheKey {
             members.append(.init(key: "prompt_cache_key", value: .string(promptCacheKey)))
+        }
+        if stream {
+            members.append(.init(key: "stream", value: .bool(true)))
+        }
+        if !include.isEmpty {
+            members.append(.init(key: "include", value: .array(include.map { .string($0) })))
         }
 
         return JSONNode.object(members).serialized

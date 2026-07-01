@@ -41,7 +41,8 @@ enum XAIRequestBuilder {
             textFormat: textFormat,
             temperature: temperature,
             maxOutputTokens: maxTokens,
-            promptCacheKey: conversationState.promptCacheKey
+            promptCacheKey: conversationState.promptCacheKey,
+            include: makeInclude(serverTools: serverTools)
         )
 
         let userPrompt = XAIInputBuilder.latestUserPrompt(from: transcript)
@@ -89,6 +90,14 @@ enum XAIRequestBuilder {
         case .custom(let value):
             return XAIReasoningEffort(rawValue: value) ?? defaultEffort
         }
+    }
+
+    private static func makeInclude(serverTools: Set<XAIServerTool>) -> [String] {
+        var include: [String] = []
+        if serverTools.contains(.webSearch) {
+            include.append("web_search_call.action.sources")
+        }
+        return include
     }
 
     private static func makeTools(

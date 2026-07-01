@@ -11,8 +11,9 @@ public enum XAILiveServerToolsScenario {
     public static let timeout: TimeInterval = 240
 
     public static let instructions = """
-        You are a concise research assistant. Use web_search and x_search when needed.
-        Cite sources. No markdown.
+        You are a concise research assistant.
+        Use web_search for web facts, x_search for X/Twitter discourse, and open_page when given a URL.
+        Cite sources with inline citations. No markdown except citation links.
         """
 
     /// Step 1 — xAI web-search doc example.

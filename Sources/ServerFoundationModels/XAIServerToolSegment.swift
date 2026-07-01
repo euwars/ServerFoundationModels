@@ -165,7 +165,7 @@ extension XAIServerToolSegment.Content {
         switch self {
         case .webSearch: "web_search"
         case .xSearch: "x_search"
-        case .webFetch: "web_search"
+        case .webFetch: "open_page"
         case .unrecognized(let activity): activity.itemType
         }
     }

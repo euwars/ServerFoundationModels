@@ -22,7 +22,7 @@ echo "=== Parallel jobs: $SWIFT_JOBS (override with SWIFT_BUILD_JOBS) ==="
 
 pass() { echo "OK: $1"; }
 
-XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests'
+XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAIResponseStreamTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests|XAILiveServerToolsValidationTests|XAIServerToolTranscriptCodableTests'
 PARITY_FILTER='APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
 
 if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then

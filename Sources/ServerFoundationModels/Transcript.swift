@@ -579,9 +579,9 @@ extension Transcript.CustomSegment {
 ///   Equatable]` existentials whose concrete types cannot be recovered when
 ///   decoding, so metadata is not encoded and always decodes as `[:]`.
 /// - `.custom` segments encode their id and textual description (the same
-///   text used to replay them in prompts), but the concrete `CustomSegment`
-///   type cannot be recovered when decoding, so they decode as `.text`
-///   segments preserving the id and description.
+///   text used to replay them in prompts). `XAIServerToolSegment` round-trips
+///   via `subtype: "xai_server_tool"`. Other custom segment types decode as
+///   `.text` segments preserving the id and description.
 /// - Image attachments encode their id, label, orientation, and image bytes
 ///   (PNG-encoded on Darwin; the stored data on Linux). On Darwin the
 ///   decoded `CGImage` is a re-decoded copy of those bytes, equal by value
@@ -750,12 +750,14 @@ extension Transcript: Codable {
         var kind: String
         var id: String
         var content: String?
+        var subtype: String?
         var source: String?
         var label: String?
         var data: Data?
         var orientation: UInt32?
 
         init(_ segment: Transcript.Segment) {
+            subtype = nil
             switch segment {
             case .text(let text):
                 kind = "text"
@@ -782,7 +784,14 @@ extension Transcript: Codable {
             case .custom(let custom):
                 kind = "custom"
                 id = custom.id
-                content = custom.description
+                if let activity = custom as? XAIServerToolSegment,
+                    let encoded = Self.encodeXAIContent(activity.content)
+                {
+                    subtype = "xai_server_tool"
+                    content = encoded
+                } else {
+                    content = custom.description
+                }
             }
         }
 
@@ -820,8 +829,13 @@ extension Transcript: Codable {
                 return .attachment(.init(id: id, content: .image(.init(data: data)), label: label))
                 #endif
             case "custom":
-                // The concrete CustomSegment type is not recoverable from
-                // JSON; preserve the id and replay text as a text segment.
+                if subtype == "xai_server_tool",
+                    let payload = content,
+                    let decoded = Self.decodeXAIContent(payload)
+                {
+                    return .custom(XAIServerToolSegment(id: id, content: decoded))
+                }
+                // Unknown custom segment types preserve replay text as a text segment.
                 return .text(.init(id: id, content: content ?? ""))
             default:
                 throw DecodingError.dataCorrupted(.init(
@@ -829,6 +843,16 @@ extension Transcript: Codable {
                     debugDescription: "unknown segment kind '\(kind)'"
                 ))
             }
+        }
+
+        private static func encodeXAIContent(_ content: XAIServerToolSegment.Content) -> String? {
+            guard let data = try? JSONEncoder().encode(content) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+
+        private static func decodeXAIContent(_ payload: String) -> XAIServerToolSegment.Content? {
+            guard let data = payload.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(XAIServerToolSegment.Content.self, from: data)
         }
     }
 }

@@ -47,7 +47,7 @@ enum XAIResponseTranslator {
             topLevelCitations: citations
         )
 
-        let usage = parseUsage(root["usage"])
+        let usage = parseUsage(from: root["usage"])
         return Parsed(
             responseId: stringValue(root["id"]),
             text: textParts.joined(separator: "\n\n"),
@@ -82,7 +82,7 @@ enum XAIResponseTranslator {
         }
     }
 
-    private static func parseUsage(_ node: JSONNode?) -> LanguageModelExecutorGenerationChannel.Usage? {
+    static func parseUsage(from node: JSONNode?) -> LanguageModelExecutorGenerationChannel.Usage? {
         guard let node else { return nil }
         func intValue(_ child: JSONNode?) -> Int {
             if case .integer(let value) = child { return Int(value) }
