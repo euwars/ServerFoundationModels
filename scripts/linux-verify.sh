@@ -36,7 +36,10 @@ if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then
 fi
 
 echo "--- build library + tests (release, NIO transport) ---"
-swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --build-tests
+# Release strips -enable-testing by default, so a standalone `build --build-tests`
+# compiles the @testable test modules against a non-testing library and fails.
+# `swift test` enables it implicitly; match that here.
+swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --build-tests -Xswiftc -enable-testing
 pass "release build (AsyncHTTPClient)"
 
 echo "--- build XAILiveProbe (release) ---"

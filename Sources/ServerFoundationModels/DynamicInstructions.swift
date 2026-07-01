@@ -190,11 +190,10 @@ extension Optional: DynamicInstructions, ResolvableDynamicInstructions where Wra
 
 @resultBuilder
 public struct DynamicInstructionsBuilder {
-    // Leaf nodes declare `Body == Never`; `content` is uninhabited, so an empty
-    // exhaustive switch consumes it without an unreachable-statement warning.
-    public static func buildBlock(_ content: Never) -> Never {
-        switch content {}
-    }
+    // Leaf nodes declare `Body == Never`; `content` is uninhabited so the body is
+    // unreachable. An empty body has no statement to flag as "will never be
+    // executed" (unlike `content` or `switch content {}`, which warn on Linux).
+    public static func buildBlock(_ content: Never) -> Never {}
 
     public static func buildBlock() -> EmptyDynamicInstructions {
         EmptyDynamicInstructions()

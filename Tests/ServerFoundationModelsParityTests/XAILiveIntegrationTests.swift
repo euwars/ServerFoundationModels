@@ -94,6 +94,7 @@ struct XAILiveIntegrationTests {
             print("[xai-live]  \(XAIServerToolSegmentCollector.describe(segment))")
         }
 
-        #expect(inventory.isStrictPass, inventory.failureSummary ?? "strict segment coverage failed")
+        let coverageSummary = inventory.failureSummary ?? "strict segment coverage failed"
+        #expect(inventory.isStrictPass, "\(coverageSummary)")
     }
 }

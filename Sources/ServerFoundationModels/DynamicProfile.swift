@@ -46,9 +46,7 @@ extension LanguageModelSession {
 
     @resultBuilder
     public struct DynamicProfileBuilder {
-        public static func buildBlock(_ content: Never) -> Never {
-            switch content {}
-        }
+        public static func buildBlock(_ content: Never) -> Never {}
 
         public static func buildBlock<T: LanguageModelSession.DynamicProfile>(_ content: T) -> T {
             content

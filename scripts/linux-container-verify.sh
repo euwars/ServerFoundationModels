@@ -81,6 +81,8 @@ if [[ -n "${LINUX_VERIFY_PLATFORM:-}" ]]; then
   platform_args=(--platform "$LINUX_VERIFY_PLATFORM")
 fi
 
-docker_cmd run --rm -it=false "${platform_args[@]}" "${docker_runtime[@]}" \
+# `${platform_args[@]+…}` guard: macOS bash 3.2 treats an empty array under
+# `set -u` as unbound, so expand to nothing when no platform override is set.
+docker_cmd run --rm -it=false "${platform_args[@]+"${platform_args[@]}"}" "${docker_runtime[@]}" \
   "${mount_args[@]}" "${env_args[@]}" -w /work "$IMAGE" \
   bash scripts/linux-verify.sh
