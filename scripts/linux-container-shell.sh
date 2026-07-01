@@ -9,9 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${LINUX_VERIFY_IMAGE:-swift:6.2}"
 BUILD_VOLUME="${LINUX_VERIFY_BUILD_VOLUME:-sfm-linux-build-cache}"
-HOST_CPUS="${LINUX_VERIFY_CPUS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo "")}"
-CPU_ARGS=()
-[[ -n "$HOST_CPUS" ]] && CPU_ARGS=(--cpus="$HOST_CPUS")
+SHM_SIZE="${LINUX_VERIFY_SHM_SIZE:-4g}"
 
 docker_cmd() {
   command -v docker >/dev/null 2>&1 && command docker "$@" && return
@@ -20,11 +18,19 @@ docker_cmd() {
   echo "docker not found" >&2; exit 127
 }
 
+DOCKER_RUNTIME=(--shm-size="$SHM_SIZE")
+[[ -n "${LINUX_VERIFY_CPUS:-}" ]] && DOCKER_RUNTIME+=(--cpus="$LINUX_VERIFY_CPUS")
+
+if [[ -z "${SWIFT_BUILD_JOBS:-}" ]]; then
+  SWIFT_BUILD_JOBS="$(docker_cmd run --rm "$IMAGE" nproc 2>/dev/null || echo 4)"
+  export SWIFT_BUILD_JOBS
+fi
+
 docker_cmd volume create "$BUILD_VOLUME" >/dev/null 2>&1 || true
 
 if [[ $# -gt 0 ]]; then
   docker_cmd run --rm -it \
-    "${CPU_ARGS[@]}" \
+    "${DOCKER_RUNTIME[@]}" \
     -e SWIFT_BUILD_JOBS \
     -v "$ROOT:/work:rw" \
     -v "$BUILD_VOLUME:/work/.build" \
@@ -33,7 +39,7 @@ if [[ $# -gt 0 ]]; then
     "$@"
 else
   docker_cmd run --rm -it \
-    "${CPU_ARGS[@]}" \
+    "${DOCKER_RUNTIME[@]}" \
     -e SWIFT_BUILD_JOBS \
     -v "$ROOT:/work:rw" \
     -v "$BUILD_VOLUME:/work/.build" \

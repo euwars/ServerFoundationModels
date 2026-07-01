@@ -150,7 +150,8 @@ bash scripts/linux-container-verify.sh
 # Fast dev loop — debug build + XAI unit tests only
 LINUX_VERIFY_QUICK=1 bash scripts/linux-container-verify.sh
 
-# Tune parallelism (defaults: all host/container CPUs via nproc)
+# Docker uses container nproc for -j, 4g shm for parallel C++ builds, no --cpus cap by default
+# Raise OrbStack Settings → CPUs if builds look idle; optional explicit cap:
 SWIFT_BUILD_JOBS=20 LINUX_VERIFY_CPUS=20 bash scripts/linux-container-verify.sh
 
 # Interactive shell with warm cache
