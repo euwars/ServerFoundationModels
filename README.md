@@ -67,50 +67,215 @@ profiles. On Apple platforms, `SystemLanguageModel` bridges to the real
 on-device model. Third-party model packages built for Apple's
 `LanguageModel`/`LanguageModelExecutor` protocols plug in unmodified.
 
-### Quick start — xAI (Grok)
+## xAI (Grok)
 
-`XAILanguageModel` talks to xAI's Responses API (`/v1/responses`) with
-native `previous_response_id` chaining, `prompt_cache_key` prefix caching,
-and inline-output replay for tool-heavy parents (ported from production
-xAI integrations):
+`XAILanguageModel` conforms to the same `LanguageModel` protocol and drives
+xAI's **Responses API** (`/v1/responses`) with native `previous_response_id`
+chaining, `prompt_cache_key` prefix caching, SSE streaming, guided JSON, and
+server-side tools. Everything below uses the ordinary `LanguageModelSession`
+API — swap the model and it behaves like any other provider.
+
+### Setup and authentication
 
 ```swift
 import ServerFoundationModels
 
-let state = XAIConversationState()
+// Development: key in the process environment.
 let model = XAILanguageModel(
     name: .grok4_3,
-    auth: .apiKey(ProcessInfo.processInfo.environment["XAI_API_KEY"]!),
-    conversationState: state,
-    serverTools: [.webSearch]
+    auth: .apiKey(ProcessInfo.processInfo.environment["XAI_API_KEY"]!)
 )
-let session = LanguageModelSession(model: model, instructions: "You are concise.")
-let answer = try await session.respond(to: "What is ServerFoundationModels?")
+
+// Production: keep the key server-side; the app talks to your relay.
+let proxied = XAILanguageModel(
+    name: .grok4_3,
+    auth: .proxied(headers: ["Authorization": "Bearer \(sessionToken)"]),
+    baseURL: URL(string: "https://api.yourbackend.com/xai/responses")!,
+    timeout: 120
+)
 ```
 
-Use one `XAIConversationState` per `LanguageModelSession`. Multi-agent
-models (`.grok4_20MultiAgent`) are supported but not threadable via
-`previous_response_id` — the executor replays stored output items instead.
+### Models
 
-With `serverTools` enabled, search/page/citation activity surfaces in the
-transcript as `XAIServerToolSegment` custom segments (Apple's Beta 2
-`Transcript.CustomSegment` pattern):
+| Model | `id` | Notes |
+| --- | --- | --- |
+| `.grok4_3` | `grok-4.3-latest` | default; threadable, vision, guided generation |
+| `.grok4_1Fast` | `grok-4-1-fast-reasoning-latest` | lower latency |
+| `.grok4_20MultiAgent` | `grok-4.20-multi-agent` | not threadable — replays stored output inline |
+
+Any other deployment: `XAILanguageModel(name: XAIModel(id: "grok-…"), auth: …)`.
+
+### Text and streaming
 
 ```swift
+let session = LanguageModelSession(model: model, instructions: "You are concise.")
+
+// One-shot
+let reply = try await session.respond(to: "Summarize the Swift actor model in two sentences.")
+print(reply.content)
+print(reply.usage.input.totalTokenCount, reply.usage.output.totalTokenCount)
+
+// Streaming — snapshots are cumulative, so print only what's new
+var printed = ""
+for try await snapshot in session.streamResponse(to: "List three uses of actors.") {
+    print(snapshot.content.dropFirst(printed.count), terminator: "")
+    printed = snapshot.content
+}
+```
+
+### Structured output
+
+```swift
+@Generable
+struct Company {
+    @Guide(description: "Official company name") var name: String
+    @Guide(.range(1900...2100)) var founded: Int
+}
+
+// Typed — decoded straight into your value
+let company = try await session.respond(to: "Facts about xAI.", generating: Company.self).content
+print(company.name, company.founded)
+
+// Or a runtime GenerationSchema when the shape isn't known at compile time
+let schema = GenerationSchema(type: Company.self, properties: [
+    .init(name: "name", type: String.self),
+    .init(name: "founded", type: Int.self),
+])
+let json = try await session.respond(to: "Facts about OpenAI.", schema: schema).content.jsonString
+```
+
+### Reasoning effort
+
+`ContextOptions.reasoningLevel` maps to xAI's `reasoning_effort`
+(`.light`→low, `.moderate`→medium, `.deep`→high, `.custom("…")` verbatim);
+omit it to use the model's default.
+
+```swift
+let proof = try await session.respond(
+    to: "Prove that the square root of 2 is irrational.",
+    options: GenerationOptions(),
+    contextOptions: ContextOptions(reasoningLevel: .deep)
+)
+```
+
+### Server tools — web & X search, citations
+
+Enable server-side tools per model. `.webSearch` also lets the model open
+pages; `.xSearch` searches X (Twitter). Their activity is recorded in the
+transcript as `XAIServerToolSegment` custom segments (Apple's
+`Transcript.CustomSegment` pattern), updated in place as results and
+citations arrive.
+
+```swift
+let model = XAILanguageModel(
+    name: .grok4_3,
+    auth: .apiKey(key),
+    serverTools: [.webSearch, .xSearch]
+)
+let session = LanguageModelSession(model: model)
+let reply = try await session.respond(to: "What shipped in Swift 6.2? Cite sources.")
+
 for entry in session.transcript {
     guard case .response(let response) = entry else { continue }
-    for segment in response.segments {
-        if case .custom(let custom) = segment,
-           let activity = custom as? XAIServerToolSegment
-        {
-            switch activity.content {
-            case .webSearch(let search): print(search.query, search.outcome?.citations ?? [])
-            case .webFetch(let fetch): print(fetch.url)
-            default: break
-            }
+    for case .custom(let custom) in response.segments {
+        guard let activity = custom as? XAIServerToolSegment else { continue }
+        switch activity.content {
+        case .webSearch(let s):
+            print("web:", s.query, "→", s.outcome?.hits.map(\.url) ?? [])
+            for c in s.outcome?.citations ?? [] { print("  cite:", c.url, c.title ?? "") }
+        case .xSearch(let s):
+            print("X:", s.query)
+        case .webFetch(let f):
+            print("opened:", f.url)
+        case .unrecognized(let a):
+            print("future tool:", a.itemType)   // preserved verbatim for replay
         }
     }
 }
+```
+
+Segments also stream incrementally during `streamResponse` (as
+`updateCustomSegment` channel events) before the final transcript is written.
+
+### Multi-turn conversations (threading)
+
+One `XAIConversationState` lives per session (created for you by default).
+It holds the `previous_response_id`, so follow-up turns send only the new
+message instead of re-uploading the whole conversation.
+
+```swift
+let session = LanguageModelSession(model: model)   // its own conversation thread
+_ = try await session.respond(to: "My name is Ada — remember it.")
+let reply = try await session.respond(to: "What's my name?")   // threaded; not re-sent
+```
+
+Multi-agent models can't thread; the executor transparently replays stored
+output items inline instead.
+
+### Persisting and resuming a conversation
+
+`Transcript` (including `XAIServerToolSegment`) round-trips through
+`Codable`. Resume by loading it into a session with a fresh model — with no
+live conversation state, the provider reconstructs prior assistant text and
+server-tool activity as input ("fresh-mode replay").
+
+```swift
+let blob = try JSONEncoder().encode(session.transcript)          // save
+
+let restored = try JSONDecoder().decode(Transcript.self, from: blob)   // later / elsewhere
+let resumed = LanguageModelSession(
+    model: XAILanguageModel(name: .grok4_3, auth: .apiKey(key), serverTools: [.webSearch]),
+    transcript: restored
+)
+let reply = try await resumed.respond(to: "Based on your earlier search, summarize again.")
+```
+
+### Client-side tools (function calling)
+
+Your own `Tool`s run in-process and compose with `serverTools`.
+
+```swift
+struct PaperSize: Tool {
+    @Generable struct Arguments {
+        @Guide(description: "Paper name, e.g. A4 or Letter") var name: String
+    }
+    let description = "Return paper dimensions in millimeters."
+    func call(arguments: Arguments) async throws -> String {
+        arguments.name == "A4" ? "210 x 297 mm" : "unknown size"
+    }
+}
+
+let session = LanguageModelSession(model: model, tools: [PaperSize()])
+let reply = try await session.respond(to: "How wide is A4 paper?")
+```
+
+### Error handling
+
+Provider errors map to the framework's typed `LanguageModelError`.
+
+```swift
+do {
+    let reply = try await session.respond(to: prompt)
+} catch let error as LanguageModelError {
+    switch error {
+    case .rateLimited(let info):
+        print("rate limited; retry after", info.resetDate ?? .now)
+    case .contextSizeExceeded:
+        print("prompt/transcript too large — trim history")
+    default:
+        print("model error:", error.localizedDescription)
+    }
+}
+```
+
+### Diagnostics
+
+Optional [swift-log](https://github.com/apple/swift-log) output (silent by
+default, never logs prompt or response content):
+
+```swift
+var model = XAILanguageModel(name: .grok4_3, auth: .apiKey(key))
+model.logger = Logger(label: "xai")
 ```
 
 ## How parity is proven
