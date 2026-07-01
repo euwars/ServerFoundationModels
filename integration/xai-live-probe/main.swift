@@ -1,12 +1,23 @@
 import Foundation
 import ServerFoundationModels
 
+enum XAILiveProbeFailure: Error, CustomStringConvertible {
+    case missingAPIKey
+    case verificationFailed
+
+    var description: String {
+        switch self {
+        case .missingAPIKey: "XAI_API_KEY is required"
+        case .verificationFailed: "RESULT: FAIL"
+        }
+    }
+}
+
 @main
 struct XAILiveProbe {
     static func main() async throws {
         guard let key = ProcessInfo.processInfo.environment["XAI_API_KEY"], !key.isEmpty else {
-            fputs("XAI_API_KEY is required\n", stderr)
-            exit(1)
+            throw XAILiveProbeFailure.missingAPIKey
         }
 
         let state = XAIConversationState()
@@ -34,7 +45,6 @@ struct XAILiveProbe {
         print("turn2 text: \(second.content.trimmingCharacters(in: .whitespacesAndNewlines))")
         print("turn2 usage: input=\(second.usage.input.totalTokenCount) cached=\(second.usage.input.cachedTokenCount) output=\(second.usage.output.totalTokenCount)")
 
-        // Turn1 answered 4; chained turn2 should be 4×3=12, turn3 should be 12+10=22.
         let secondHasTwelve = second.content.contains("12")
         let secondCached = second.usage.input.cachedTokenCount > 0
         let secondThreaded = if case .threaded = modeBeforeTurn2 { true } else { false }
@@ -55,10 +65,9 @@ struct XAILiveProbe {
             && thirdHasTwentyTwo && thirdCached
         if ok {
             print("RESULT: PASS — grok-4.3 chaining and prompt caching verified")
-            exit(0)
         } else {
             print("RESULT: FAIL")
-            exit(2)
+            throw XAILiveProbeFailure.verificationFailed
         }
     }
 

@@ -28,17 +28,13 @@ docker_cmd() {
   exit 127
 }
 
-platform_args=()
-if [[ -n "${LINUX_VERIFY_PLATFORM:-}" ]]; then
-  platform_args=(--platform "$LINUX_VERIFY_PLATFORM")
-fi
-
 echo "=== Running Linux verify in container: $IMAGE ==="
 
-docker_cmd run --rm \
-  "${platform_args[@]}" \
-  -v "$ROOT:/src:ro" \
-  -e XAI_API_KEY \
-  -w /src \
-  "$IMAGE" \
-  bash -lc 'cp -a /src /work && cd /work && bash scripts/linux-verify.sh'
+run_args=(run --rm -v "$ROOT:/src:ro" -e XAI_API_KEY -w /src "$IMAGE" \
+  bash -lc 'cp -a /src /work && cd /work && bash scripts/linux-verify.sh')
+if [[ -n "${LINUX_VERIFY_PLATFORM:-}" ]]; then
+  run_args=(run --rm --platform "$LINUX_VERIFY_PLATFORM" -v "$ROOT:/src:ro" -e XAI_API_KEY -w /src "$IMAGE" \
+    bash -lc 'cp -a /src /work && cd /work && bash scripts/linux-verify.sh')
+fi
+
+docker_cmd "${run_args[@]}"
