@@ -53,12 +53,37 @@ Prompt, instruction, and response content is never logged at any level.
   or abandoning a `ResponseStream` iterator, cancels the in-flight HTTP
   request. No detached work survives the caller.
 
+## xAI (`XAILanguageModel`)
+
+- **One state object per session**: pass a dedicated `XAIConversationState`
+  into each `XAILanguageModel`. The executor registry shares HTTP clients
+  across configurations, but chaining state (`previous_response_id`, stored
+  `output[]` bytes, prompt-cache key) lives in that state object.
+- **Chaining modes**: threadable parents (single-agent Grok, live response
+  ID < 25 days) use `previous_response_id` with delta input only.
+  Multi-agent parents and expired IDs fall back to inline output replay.
+  A 400 `"Each message must have at least one content element"` on threading
+  triggers automatic inline replay.
+- **Timeouts**: default 300 s. Multi-agent calls can run several minutes;
+  raise `XAILanguageModel(timeout:)` if needed.
+- **Prompt cache**: `conversationState.promptCacheKey` is sent on every
+  request; confirm hits via `Response.usage.input.cachedTokenCount`.
+- **Wire quirks** (handled by the executor): omit empty `tools`, never send
+  `instructions` with `previous_response_id`, user content as
+  `input_text` blocks, `store: true` on every request.
+
+Unlike `ChatCompletionsLanguageModel`, threaded xAI turns do **not**
+resend the full transcript prefix — only the delta since the last
+response. The transcript-growth strategies below still apply when inline
+replay or fresh mode is active.
+
 ## Transcript growth
 
 A session's transcript grows without bound: every prompt, response,
-tool-call round, and re-resolved profile instructions entry is persisted,
-and the FULL transcript is sent to the provider on every round. For
-long-lived conversations this means:
+tool-call round, and re-resolved profile instructions entry is persisted.
+With `ChatCompletionsLanguageModel` the FULL transcript is sent to the
+provider on every round; with threaded `XAILanguageModel` only the delta
+is sent when chaining succeeds. For long-lived conversations this means:
 
 - request payloads (and provider token counts) grow linearly per round;
 - you will eventually hit the model's context window, surfaced as

@@ -9,7 +9,8 @@ let package = Package(
         .iOS("27.0"),
     ],
     products: [
-        .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"])
+        .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
+        .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
     ],
     traits: [
         // NIO-based HTTP transport (connection pooling; avoids corelibs
@@ -61,6 +62,11 @@ let package = Package(
         ),
         // Subject: the same scenarios compiled against this package, running
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
+        .executableTarget(
+            name: "XAILiveProbe",
+            dependencies: ["ServerFoundationModels"],
+            path: "integration/xai-live-probe"
+        ),
         .testTarget(
             name: "ServerFoundationModelsParityTests",
             dependencies: [

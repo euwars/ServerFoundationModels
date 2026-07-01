@@ -67,6 +67,31 @@ profiles. On Apple platforms, `SystemLanguageModel` bridges to the real
 on-device model. Third-party model packages built for Apple's
 `LanguageModel`/`LanguageModelExecutor` protocols plug in unmodified.
 
+### Quick start — xAI (Grok)
+
+`XAILanguageModel` talks to xAI's Responses API (`/v1/responses`) with
+native `previous_response_id` chaining, `prompt_cache_key` prefix caching,
+and inline-output replay for tool-heavy parents (ported from production
+xAI integrations):
+
+```swift
+import ServerFoundationModels
+
+let state = XAIConversationState()
+let model = XAILanguageModel(
+    name: .grok4_3,
+    auth: .apiKey(ProcessInfo.processInfo.environment["XAI_API_KEY"]!),
+    conversationState: state,
+    serverTools: [.webSearch]
+)
+let session = LanguageModelSession(model: model, instructions: "You are concise.")
+let answer = try await session.respond(to: "What is ServerFoundationModels?")
+```
+
+Use one `XAIConversationState` per `LanguageModelSession`. Multi-agent
+models (`.grok4_20MultiAgent`) are supported but not threadable via
+`previous_response_id` — the executor replays stored output items instead.
+
 ## How parity is proven
 
 The claim "just replace the import" is enforced by five independent gates,

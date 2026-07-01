@@ -1,0 +1,69 @@
+import Foundation
+@testable import ServerFoundationModels
+import Testing
+
+@Suite struct XAIWireFormatTests {
+    @Test func emptyToolsAreOmittedFromWire() {
+        let request = XAIResponsesRequest(
+            model: "grok-4.3-latest",
+            instructions: nil,
+            inputItems: [XAIInputBuilder.userMessage(text: "scorecard prompt")],
+            tools: [],
+            previousResponseId: "resp_abc",
+            promptCacheKey: "cache-key"
+        )
+        let wire = request.serialize()
+        #expect(!wire.contains("\"tools\""))
+    }
+
+    @Test func nonEmptyToolsAreEncoded() {
+        let request = XAIResponsesRequest(
+            model: "grok-4.3-latest",
+            instructions: nil,
+            inputItems: [XAIInputBuilder.userMessage(text: "resolve prompt")],
+            tools: [
+                .object([.init(key: "type", value: .string("web_search"))]),
+                .object([.init(key: "type", value: .string("x_search"))]),
+            ],
+            previousResponseId: "resp_abc"
+        )
+        let wire = request.serialize()
+        #expect(wire.contains("\"tools\""))
+        #expect(wire.contains("\"web_search\""))
+        #expect(wire.contains("\"x_search\""))
+    }
+
+    @Test func userMessageUsesInputTextBlocks() {
+        let message = XAIInputBuilder.userMessage(text: "hello")
+        let wire = message.serialized
+        #expect(wire.contains("\"input_text\""))
+        #expect(wire.contains("\"hello\""))
+        #expect(!wire.contains("\"content\":\"hello\""))
+    }
+
+    @Test func threadedRequestOmitsInstructionsWhenSetExternally() {
+        var request = XAIResponsesRequest(
+            model: "grok-4.3-latest",
+            instructions: "system prompt",
+            inputItems: [XAIInputBuilder.userMessage(text: "follow-up")],
+            tools: [],
+            previousResponseId: "resp_parent"
+        )
+        request.instructions = nil
+        let wire = request.serialize()
+        #expect(!wire.contains("\"instructions\""))
+        #expect(wire.contains("\"previous_response_id\""))
+    }
+
+    @Test func storeAndPromptCacheKeyPresent() {
+        let request = XAIResponsesRequest(
+            model: "grok-4.3-latest",
+            inputItems: [XAIInputBuilder.userMessage(text: "hi")],
+            tools: [],
+            promptCacheKey: "convo-uuid"
+        )
+        let wire = request.serialize()
+        #expect(wire.contains("\"store\":true"))
+        #expect(wire.contains("\"prompt_cache_key\":\"convo-uuid\""))
+    }
+}
