@@ -13,6 +13,9 @@ let package = Package(
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
         .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
         .executable(name: "XAIServerToolsProbe", targets: ["XAIServerToolsProbe"]),
+        .executable(name: "XAIDeepResearchProbe", targets: ["XAIDeepResearchProbe"]),
+        .executable(name: "XAISubagentsProbe", targets: ["XAISubagentsProbe"]),
+        .executable(name: "XAIRecursiveResearchProbe", targets: ["XAIRecursiveResearchProbe"]),
     ],
     traits: [
         // NIO-based HTTP transport (connection pooling; avoids corelibs
@@ -68,6 +71,21 @@ let package = Package(
             name: "XAIServerToolsProbe",
             dependencies: ["ServerFoundationModels"],
             path: "integration/xai-server-tools-probe"
+        ),
+        .executableTarget(
+            name: "XAIDeepResearchProbe",
+            dependencies: ["ServerFoundationModels"],
+            path: "integration/xai-deep-research"
+        ),
+        .executableTarget(
+            name: "XAISubagentsProbe",
+            dependencies: ["ServerFoundationModels"],
+            path: "integration/xai-subagents"
+        ),
+        .executableTarget(
+            name: "XAIRecursiveResearchProbe",
+            dependencies: ["ServerFoundationModels"],
+            path: "integration/xai-recursive-research"
         ),
         .testTarget(
             name: "ServerFoundationModelsParityTests",
