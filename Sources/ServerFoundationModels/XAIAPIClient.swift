@@ -171,7 +171,7 @@ final class LinuxDataSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let finished = handler(for: task)
-        handlers.withLock { $0.removeValue(forKey: task.taskIdentifier) }
+        handlers.withLock { _ = $0.removeValue(forKey: task.taskIdentifier) }
         finished?.complete(error: error)
     }
 }
