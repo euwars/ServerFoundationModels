@@ -1,3 +1,6 @@
 .build/
 .swiftpm/
 .DS_Store
+
+# Local reference material (downloaded sample projects), not part of the package.
+SAMPLES/
