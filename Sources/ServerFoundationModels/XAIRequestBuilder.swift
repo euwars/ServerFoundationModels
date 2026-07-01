@@ -69,7 +69,10 @@ enum XAIRequestBuilder {
             )
         case .fresh:
             built.instructions = XAIInputBuilder.instructionsText(from: transcript)
-            built.inputItems = XAIInputBuilder.entries(from: transcript)
+            // Fresh mode may run on a rehydrated transcript with prior turns and no
+            // live conversation state, so replay assistant text and server-tool
+            // segments rather than dropping them.
+            built.inputItems = XAIInputBuilder.entries(from: transcript, includeAssistantTurns: true)
             if built.inputItems.isEmpty, let userPrompt {
                 built.inputItems = [XAIInputBuilder.userMessage(text: userPrompt)]
             }

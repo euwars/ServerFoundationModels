@@ -164,21 +164,26 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
 
             if response.statusCode >= 400 || contentType.contains("application/json") {
-                var responseBody = ""
+                var bodyLines: [String] = []
                 for try await line in lines {
-                    responseBody += line
-                    if responseBody.count > 8192 { break }
+                    bodyLines.append(line)
                 }
-                logger.warning("xai.responses error", metadata: [
-                    "status": .stringConvertible(response.statusCode),
-                    "body": .string(String(responseBody.prefix(256))),
-                ])
-                if response.statusCode < 400, !responseBody.isEmpty {
-                    let parsed = try XAIResponseTranslator.parse(body: Data(responseBody.utf8))
-                    await XAIResponseTranslator.emit(parsed, into: channel)
-                    return parsed
+                let responseBody = bodyLines.joined(separator: "\n")
+                if response.statusCode >= 400 {
+                    logger.warning("xai.responses error", metadata: [
+                        "status": .stringConvertible(response.statusCode),
+                        "body": .string(String(responseBody.prefix(256))),
+                    ])
+                    throw XAIError(status: response.statusCode, body: responseBody)
                 }
-                throw XAIError(status: response.statusCode, body: responseBody)
+                // Server honored the request but replied with a single non-streamed
+                // JSON document; parse the whole body rather than truncating it.
+                guard !responseBody.isEmpty else {
+                    throw XAIError(status: response.statusCode, body: responseBody)
+                }
+                let parsed = try XAIResponseTranslator.parse(body: Data(responseBody.utf8))
+                await XAIResponseTranslator.emit(parsed, into: channel)
+                return parsed
             }
 
             var accumulator = XAIResponseStream.Accumulator()

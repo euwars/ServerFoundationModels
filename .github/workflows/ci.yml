@@ -28,8 +28,8 @@ jobs:
         run: swift build --build-tests
       - name: API + differential parity tests (default traits, NIO transport)
         run: swift test --filter 'APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
-      - name: XAI provider unit tests (wire format, threading, inline replay)
-        run: swift test --filter 'XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAISchemaHelpersTests'
+      - name: XAI provider unit tests (wire format, threading, server-tool segments)
+        run: swift test --filter 'XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAIResponseStreamTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests|XAILiveServerToolsValidationTests|XAIServerToolTranscriptCodableTests'
       - name: Transport tests (corelibs URLSession, traits disabled)
         run: swift test --disable-default-traits --filter 'WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
       - name: Signature-level interface diff

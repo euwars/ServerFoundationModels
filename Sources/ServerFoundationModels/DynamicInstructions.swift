@@ -190,9 +190,10 @@ extension Optional: DynamicInstructions, ResolvableDynamicInstructions where Wra
 
 @resultBuilder
 public struct DynamicInstructionsBuilder {
-    // Leaf nodes declare `Body == Never`; their unreachable bodies pass through.
+    // Leaf nodes declare `Body == Never`; `content` is uninhabited, so an empty
+    // exhaustive switch consumes it without an unreachable-statement warning.
     public static func buildBlock(_ content: Never) -> Never {
-        content
+        switch content {}
     }
 
     public static func buildBlock() -> EmptyDynamicInstructions {

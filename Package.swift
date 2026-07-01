@@ -1,5 +1,6 @@
 // swift-tools-version: 6.2
 import CompilerPluginSupport
+import Foundation
 import PackageDescription
 
 let package = Package(
@@ -26,7 +27,8 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ],
-    targets: [
+    targets: {
+        var targets: [Target] = [
         .target(
             name: "ServerFoundationModels",
             dependencies: [
@@ -45,12 +47,6 @@ let package = Package(
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
-        ),
-        // Oracle: the same scenarios compiled against Apple's FoundationModels,
-        // running against the local on-device model. No dependency on our module,
-        // so `canImport(ServerFoundationModels)` is false in this target.
-        .testTarget(
-            name: "AppleFoundationModelsParityTests"
         ),
         // Macro expansion tests (assertMacroExpansion) for the @Generable /
         // @Guide / @SessionPropertyEntry implementations.
@@ -81,5 +77,14 @@ let package = Package(
             ],
             swiftSettings: [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),
-    ]
+        ]
+        // Apple's FoundationModels macros are only available under Xcode; skip this
+        // target on macOS CLI builds so `swift test` can run ServerFoundationModels tests.
+        let includeAppleParity = ProcessInfo.processInfo.environment["INCLUDE_APPLE_PARITY_TESTS"] == "1"
+            || ProcessInfo.processInfo.environment["XCODE_VERSION_ACTUAL"] != nil
+        if includeAppleParity {
+            targets.append(.testTarget(name: "AppleFoundationModelsParityTests"))
+        }
+        return targets
+    }()
 )

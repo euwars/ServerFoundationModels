@@ -69,7 +69,7 @@ enum XAIResponseStream {
                 guard let annotation = event["annotation"],
                     let citation = XAIServerToolWire.parseCitation(from: annotation)
                 else { return [] }
-                return mergeCitationIntoLastSearchSegment(citation)
+                return distribute([citation])
 
             case "response.function_call_arguments.delta":
                 guard let itemID = XAIServerToolWire.itemID(from: event),
@@ -175,23 +175,25 @@ enum XAIResponseStream {
             return [.updateCustomSegment(segment)]
         }
 
-        private mutating func mergeCitationIntoLastSearchSegment(
-            _ citation: XAIServerToolSegment.Citation
+        /// Distributes citations onto the search segments they belong to, using the
+        /// same URL-matching (with last-segment fallback) as the batch parse path so
+        /// incremental channel updates and the final transcript agree.
+        private mutating func distribute(
+            _ citations: [XAIServerToolSegment.Citation]
         ) -> [ChannelAction] {
-            guard let id = searchSegmentIDs.last, var segment = segmentsByID[id] else { return [] }
-            segment = XAIServerToolWire.mergeCitations(into: segment, citations: [citation])
-            segmentsByID[id] = segment
-            return [.updateCustomSegment(segment)]
+            guard !citations.isEmpty else { return [] }
+            let updated = XAIServerToolWire.distributeCitations(
+                citations,
+                segmentsByID: &segmentsByID,
+                searchSegmentIDs: searchSegmentIDs
+            )
+            return updated.map { .updateCustomSegment($0) }
         }
 
         private mutating func finalizePending() -> [ChannelAction] {
             var actions: [ChannelAction] = []
 
-            if !topLevelCitations.isEmpty, let id = searchSegmentIDs.last, var segment = segmentsByID[id] {
-                segment = XAIServerToolWire.mergeCitations(into: segment, citations: topLevelCitations)
-                segmentsByID[id] = segment
-                actions.append(.updateCustomSegment(segment))
-            }
+            actions.append(contentsOf: distribute(topLevelCitations))
 
             for item in outputItems {
                 guard case .string(let type) = item["type"], type == "message" else { continue }
@@ -201,12 +203,9 @@ enum XAIResponseStream {
                     text = messageText
                     actions.append(.appendText(delta))
                 }
-                let inlineCitations = XAIServerToolWire.annotations(from: item)
-                if !inlineCitations.isEmpty, let id = searchSegmentIDs.last, var segment = segmentsByID[id] {
-                    segment = XAIServerToolWire.mergeCitations(into: segment, citations: inlineCitations)
-                    segmentsByID[id] = segment
-                    actions.append(.updateCustomSegment(segment))
-                }
+                var inlineCitations = XAIServerToolWire.annotations(from: item)
+                inlineCitations.append(contentsOf: XAIServerToolWire.parseInlineCitationLinks(from: messageText))
+                actions.append(contentsOf: distribute(inlineCitations))
             }
 
             toolCalls = functionCallArgs.values

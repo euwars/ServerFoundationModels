@@ -332,7 +332,19 @@ enum XAIInputBuilder {
         ])
     }
 
-    static func entries(from transcript: Transcript, range: Range<Int>? = nil) -> [JSONNode] {
+    /// Builds Responses API input items from transcript entries.
+    ///
+    /// `includeAssistantTurns` controls prior-assistant replay. It must stay
+    /// `false` for the threaded delta path (the server already holds those turns
+    /// behind `previous_response_id`, so resending them would duplicate context).
+    /// Fresh mode — used when a transcript is rehydrated with no live conversation
+    /// state — sets it `true` so prior assistant text and server-tool segments are
+    /// reconstructed as input rather than silently dropped.
+    static func entries(
+        from transcript: Transcript,
+        range: Range<Int>? = nil,
+        includeAssistantTurns: Bool = false
+    ) -> [JSONNode] {
         let entries = Array(transcript.allEntries)
         let slice: ArraySlice<Transcript.Entry>
         if let range {
@@ -342,7 +354,46 @@ enum XAIInputBuilder {
         }
         var items: [JSONNode] = []
         for entry in slice {
-            items.append(contentsOf: inputItems(from: entry))
+            items.append(contentsOf: inputItems(from: entry, includeAssistantTurns: includeAssistantTurns))
+        }
+        return items
+    }
+
+    static func assistantMessage(text: String) -> JSONNode {
+        .object([
+            .init(key: "type", value: .string("message")),
+            .init(key: "role", value: .string("assistant")),
+            .init(key: "content", value: .array([
+                .object([
+                    .init(key: "type", value: .string("output_text")),
+                    .init(key: "text", value: .string(text)),
+                ]),
+            ])),
+        ])
+    }
+
+    /// Reconstructs the input items for one prior assistant response, preserving
+    /// segment order: server-tool activity replays as its Responses API output
+    /// item, text/structured output as an assistant message.
+    private static func responseItems(from response: Transcript.Response) -> [JSONNode] {
+        var items: [JSONNode] = []
+        for segment in response.segments {
+            switch segment {
+            case .text(let text):
+                if !text.content.isEmpty { items.append(assistantMessage(text: text.content)) }
+            case .structure(let structure):
+                items.append(assistantMessage(text: structure.content.jsonString))
+            case .custom(let custom):
+                if let activity = custom as? XAIServerToolSegment,
+                    let item = XAIServerToolWire.outputItem(from: activity) {
+                    items.append(item)
+                } else {
+                    let description = custom.description
+                    if !description.isEmpty { items.append(assistantMessage(text: description)) }
+                }
+            case .attachment:
+                break
+            }
         }
         return items
     }
@@ -369,7 +420,10 @@ enum XAIInputBuilder {
         return nil
     }
 
-    private static func inputItems(from entry: Transcript.Entry) -> [JSONNode] {
+    private static func inputItems(
+        from entry: Transcript.Entry,
+        includeAssistantTurns: Bool
+    ) -> [JSONNode] {
         switch entry {
         case .instructions:
             return []
@@ -380,7 +434,9 @@ enum XAIInputBuilder {
         case .toolOutput(let output):
             let text = output.segments.joinedText
             return [functionCallOutput(callId: output.id, output: text)]
-        case .toolCalls, .response, .reasoning:
+        case .response(let response):
+            return includeAssistantTurns ? responseItems(from: response) : []
+        case .toolCalls, .reasoning:
             return []
         }
     }

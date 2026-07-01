@@ -30,16 +30,16 @@ enum XAIServerToolWire {
             }
         }
 
-        func mergeCitationsIntoLastSearchSegment(_ citations: [XAIServerToolSegment.Citation]) {
-            guard !citations.isEmpty, let id = searchSegmentIDs.last else { return }
-            guard let segment = segmentsByID[id] else { return }
-            switch segment.content {
-            case .webSearch, .xSearch:
+        func distributeCitations(_ citations: [XAIServerToolSegment.Citation]) {
+            let grouped = groupCitationsBySegment(
+                citations,
+                segmentsByID: segmentsByID,
+                searchSegmentIDs: searchSegmentIDs
+            )
+            for (id, cites) in grouped {
                 upsertSearch(id: id) { content in
-                    mergeCitations(into: content, citations: citations)
+                    mergeCitations(into: content, citations: cites)
                 }
-            default:
-                break
             }
         }
 
@@ -76,14 +76,16 @@ enum XAIServerToolWire {
                 if !text.isEmpty {
                     events.append(.init(kind: .appendText(text)))
                 }
-                mergeCitationsIntoLastSearchSegment(annotations(from: item))
+                var cites = annotations(from: item)
+                cites.append(contentsOf: parseInlineCitationLinks(from: text))
+                distributeCitations(cites)
 
             default:
                 break
             }
         }
 
-        mergeCitationsIntoLastSearchSegment(topLevelCitations)
+        distributeCitations(topLevelCitations)
 
         return events
     }
@@ -139,6 +141,134 @@ enum XAIServerToolWire {
     ) -> XAIServerToolSegment {
         guard !citations.isEmpty else { return segment }
         return .init(id: segment.id, content: mergeCitations(into: segment.content, citations: citations))
+    }
+
+    static func distributeCitations(
+        _ citations: [XAIServerToolSegment.Citation],
+        segmentsByID: inout [String: XAIServerToolSegment],
+        searchSegmentIDs: [String]
+    ) -> [XAIServerToolSegment] {
+        let grouped = groupCitationsBySegment(
+            citations,
+            segmentsByID: segmentsByID,
+            searchSegmentIDs: searchSegmentIDs
+        )
+        var updated: [XAIServerToolSegment] = []
+        for (id, cites) in grouped {
+            guard let segment = segmentsByID[id] else { continue }
+            let merged = mergeCitations(into: segment, citations: cites)
+            segmentsByID[id] = merged
+            updated.append(merged)
+        }
+        return updated
+    }
+
+    static func groupCitationsBySegment(
+        _ citations: [XAIServerToolSegment.Citation],
+        segmentsByID: [String: XAIServerToolSegment],
+        searchSegmentIDs: [String]
+    ) -> [String: [XAIServerToolSegment.Citation]] {
+        var grouped: [String: [XAIServerToolSegment.Citation]] = [:]
+        let fallback = searchSegmentIDs.last
+        for citation in citations {
+            let target = searchSegmentIDs.last(where: { id in
+                segmentContainsURL(segmentsByID[id], url: citation.url)
+            }) ?? fallback
+            guard let target else { continue }
+            grouped[target, default: []].append(citation)
+        }
+        return grouped
+    }
+
+    static func parseInlineCitationLinks(from text: String) -> [XAIServerToolSegment.Citation] {
+        guard !text.isEmpty else { return [] }
+        let pattern = #"\[\[([^\]]*)\]\]\(([^)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var citations: [XAIServerToolSegment.Citation] = []
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match, match.numberOfRanges >= 3,
+                let titleRange = Range(match.range(at: 1), in: text),
+                let urlRange = Range(match.range(at: 2), in: text),
+                let url = URL(string: String(text[urlRange]))
+            else { return }
+            let title = String(text[titleRange])
+            let start = text.distance(from: text.startIndex, to: titleRange.lowerBound)
+            let end = text.distance(from: text.startIndex, to: urlRange.upperBound)
+            citations.append(.init(
+                url: url,
+                title: title.isEmpty ? nil : title,
+                startIndex: start,
+                endIndex: end
+            ))
+        }
+        return citations
+    }
+
+    /// Reconstructs a Responses API output item from a server-tool segment so a
+    /// rehydrated transcript (decoded from JSON, no live conversation state) can
+    /// replay prior server-tool activity as fresh-mode input. Lossy by nature —
+    /// only the fields the segment preserves are restored. Each xAI server tool is
+    /// a single self-contained output item, so there are no call/result halves to
+    /// pair; returns `nil` only when an unrecognized item's stored JSON is unusable.
+    static func outputItem(from segment: XAIServerToolSegment) -> JSONNode? {
+        switch segment.content {
+        case .webSearch(let search):
+            return .object([
+                .init(key: "type", value: .string("web_search_call")),
+                .init(key: "id", value: .string(segment.id)),
+                .init(key: "status", value: .string(search.status ?? "completed")),
+                .init(key: "action", value: .object([
+                    .init(key: "type", value: .string("search")),
+                    .init(key: "query", value: .string(search.query)),
+                ])),
+            ])
+        case .xSearch(let search):
+            return .object([
+                .init(key: "type", value: .string("custom_tool_call")),
+                .init(key: "id", value: .string(segment.id)),
+                .init(key: "name", value: .string("x_semantic_search")),
+                .init(key: "status", value: .string(search.status ?? "completed")),
+                .init(key: "input", value: .string(jsonObjectString(["query": search.query]))),
+            ])
+        case .webFetch(let fetch):
+            return .object([
+                .init(key: "type", value: .string("web_search_call")),
+                .init(key: "id", value: .string(segment.id)),
+                .init(key: "status", value: .string(fetch.status ?? "completed")),
+                .init(key: "action", value: .object([
+                    .init(key: "type", value: .string("open_page")),
+                    .init(key: "url", value: .string(fetch.url.absoluteString)),
+                ])),
+            ])
+        case .unrecognized(let activity):
+            return try? JSONNode.parse(activity.wireJSON)
+        }
+    }
+
+    /// Serializes a flat `[String: String]` as a compact JSON object string, with
+    /// values escaped by the JSON encoder (no manual quote splicing).
+    private static func jsonObjectString(_ fields: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: fields),
+            let string = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return string
+    }
+
+    private static func segmentContainsURL(
+        _ segment: XAIServerToolSegment?,
+        url: URL
+    ) -> Bool {
+        guard let segment else { return false }
+        let target = url.absoluteString
+        switch segment.content {
+        case .webSearch(let search):
+            return search.outcome?.hits.contains { $0.url.absoluteString == target } == true
+        case .xSearch(let search):
+            return search.outcome?.hits.contains { $0.url.absoluteString == target } == true
+        default:
+            return false
+        }
     }
 
     private static func searchOutcome(
