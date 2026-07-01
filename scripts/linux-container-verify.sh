@@ -12,11 +12,29 @@
 #   LINUX_VERIFY_QUICK=1          — debug build + XAI tests only (~2 min warm)
 #   LINUX_VERIFY_NO_CACHE=1       — discard persistent .build volume
 #   LINUX_VERIFY_BUILD_VOLUME=sfm-linux-build-cache
+#   SWIFT_BUILD_JOBS=20           — parallel compile jobs (default: nproc in container)
+#   LINUX_VERIFY_CPUS=20          — docker --cpus cap (default: host logical CPUs)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${LINUX_VERIFY_IMAGE:-swift:6.2}"
 BUILD_VOLUME="${LINUX_VERIFY_BUILD_VOLUME:-sfm-linux-build-cache}"
+
+host_cpus() {
+  if [[ -n "${LINUX_VERIFY_CPUS:-}" ]]; then
+    echo "$LINUX_VERIFY_CPUS"
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu 2>/dev/null && return
+  fi
+  if command -v nproc >/dev/null 2>&1; then
+    nproc && return
+  fi
+  echo ""
+}
+
+HOST_CPUS="$(host_cpus)"
 
 docker_cmd() {
   if command -v docker >/dev/null 2>&1; then
@@ -49,10 +67,18 @@ if [[ "${LINUX_VERIFY_NO_CACHE:-}" != "1" ]]; then
   mount_args+=(-v "$BUILD_VOLUME:/work/.build")
 fi
 
-run_args=(run --rm "${mount_args[@]}" -e XAI_API_KEY -e LINUX_VERIFY_QUICK -w /work "$IMAGE" \
+cpu_args=()
+if [[ -n "$HOST_CPUS" ]]; then
+  cpu_args=(--cpus="$HOST_CPUS")
+  echo "=== Container CPUs: $HOST_CPUS ==="
+fi
+
+env_args=(-e XAI_API_KEY -e LINUX_VERIFY_QUICK -e SWIFT_BUILD_JOBS)
+
+run_args=(run --rm "${cpu_args[@]}" "${mount_args[@]}" "${env_args[@]}" -w /work "$IMAGE" \
   bash scripts/linux-verify.sh)
 if [[ -n "${LINUX_VERIFY_PLATFORM:-}" ]]; then
-  run_args=(run --rm --platform "$LINUX_VERIFY_PLATFORM" "${mount_args[@]}" -e XAI_API_KEY -e LINUX_VERIFY_QUICK -w /work "$IMAGE" \
+  run_args=(run --rm --platform "$LINUX_VERIFY_PLATFORM" "${cpu_args[@]}" "${mount_args[@]}" "${env_args[@]}" -w /work "$IMAGE" \
     bash scripts/linux-verify.sh)
 fi
 

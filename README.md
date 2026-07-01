@@ -150,6 +150,9 @@ bash scripts/linux-container-verify.sh
 # Fast dev loop — debug build + XAI unit tests only
 LINUX_VERIFY_QUICK=1 bash scripts/linux-container-verify.sh
 
+# Tune parallelism (defaults: all host/container CPUs via nproc)
+SWIFT_BUILD_JOBS=20 LINUX_VERIFY_CPUS=20 bash scripts/linux-container-verify.sh
+
 # Interactive shell with warm cache
 bash scripts/linux-container-shell.sh
 bash scripts/linux-container-shell.sh swift test --filter XAIWireFormatTests

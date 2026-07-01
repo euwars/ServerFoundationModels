@@ -9,6 +9,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${LINUX_VERIFY_IMAGE:-swift:6.2}"
 BUILD_VOLUME="${LINUX_VERIFY_BUILD_VOLUME:-sfm-linux-build-cache}"
+HOST_CPUS="${LINUX_VERIFY_CPUS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo "")}"
+CPU_ARGS=()
+[[ -n "$HOST_CPUS" ]] && CPU_ARGS=(--cpus="$HOST_CPUS")
 
 docker_cmd() {
   command -v docker >/dev/null 2>&1 && command docker "$@" && return
@@ -21,6 +24,8 @@ docker_cmd volume create "$BUILD_VOLUME" >/dev/null 2>&1 || true
 
 if [[ $# -gt 0 ]]; then
   docker_cmd run --rm -it \
+    "${CPU_ARGS[@]}" \
+    -e SWIFT_BUILD_JOBS \
     -v "$ROOT:/work:rw" \
     -v "$BUILD_VOLUME:/work/.build" \
     -w /work \
@@ -28,6 +33,8 @@ if [[ $# -gt 0 ]]; then
     "$@"
 else
   docker_cmd run --rm -it \
+    "${CPU_ARGS[@]}" \
+    -e SWIFT_BUILD_JOBS \
     -v "$ROOT:/work:rw" \
     -v "$BUILD_VOLUME:/work/.build" \
     -w /work \
