@@ -3,6 +3,12 @@ import CompilerPluginSupport
 import Foundation
 import PackageDescription
 
+/// Swift 6 language mode and complete strict-concurrency checking for all targets.
+let concurrencySettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .enableExperimentalFeature("StrictConcurrency=complete"),
+]
+
 let package = Package(
     name: "ServerFoundationModels",
     platforms: [
@@ -42,14 +48,16 @@ let package = Package(
                     package: "async-http-client",
                     condition: .when(traits: ["AsyncHTTPClient"])
                 ),
-            ]
+            ],
+            swiftSettings: concurrencySettings
         ),
         .macro(
             name: "ServerFoundationModelsMacros",
             dependencies: [
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
-            ]
+            ],
+            swiftSettings: concurrencySettings
         ),
         // Macro expansion tests (assertMacroExpansion) for the @Generable /
         // @Guide / @SessionPropertyEntry implementations.
@@ -58,34 +66,40 @@ let package = Package(
             dependencies: [
                 "ServerFoundationModelsMacros",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
-            ]
+            ],
+            swiftSettings: concurrencySettings
         ),
         // Subject: the same scenarios compiled against this package, running
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
         .executableTarget(
             name: "XAILiveProbe",
             dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-live-probe"
+            path: "integration/xai-live-probe",
+            swiftSettings: concurrencySettings
         ),
         .executableTarget(
             name: "XAIServerToolsProbe",
             dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-server-tools-probe"
+            path: "integration/xai-server-tools-probe",
+            swiftSettings: concurrencySettings
         ),
         .executableTarget(
             name: "XAIDeepResearchProbe",
             dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-deep-research"
+            path: "integration/xai-deep-research",
+            swiftSettings: concurrencySettings
         ),
         .executableTarget(
             name: "XAISubagentsProbe",
             dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-subagents"
+            path: "integration/xai-subagents",
+            swiftSettings: concurrencySettings
         ),
         .executableTarget(
             name: "XAIRecursiveResearchProbe",
             dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-recursive-research"
+            path: "integration/xai-recursive-research",
+            swiftSettings: concurrencySettings
         ),
         .testTarget(
             name: "ServerFoundationModelsParityTests",
@@ -93,7 +107,7 @@ let package = Package(
                 "ServerFoundationModels",
                 .product(name: "Logging", package: "swift-log"),
             ],
-            swiftSettings: [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
+            swiftSettings: concurrencySettings + [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),
         ]
         // Apple's FoundationModels macros are only available under Xcode; skip this
@@ -101,7 +115,10 @@ let package = Package(
         let includeAppleParity = ProcessInfo.processInfo.environment["INCLUDE_APPLE_PARITY_TESTS"] == "1"
             || ProcessInfo.processInfo.environment["XCODE_VERSION_ACTUAL"] != nil
         if includeAppleParity {
-            targets.append(.testTarget(name: "AppleFoundationModelsParityTests"))
+            targets.append(.testTarget(
+                name: "AppleFoundationModelsParityTests",
+                swiftSettings: concurrencySettings
+            ))
         }
         return targets
     }()

@@ -26,19 +26,14 @@ import sys
 path = sys.argv[1]
 text = open(path).read()
 # swiftSettings must follow dependencies in .target's argument order.
-needle = """                ),
-            ]
-        ),
-        .macro("""
-flags = """                ),
-            ],
-            swiftSettings: [.unsafeFlags([
-                "-enable-library-evolution",
-                "-emit-module-interface",
-                "-no-verify-emitted-module-interface",
-            ])]
-        ),
-        .macro("""
+needle = "            swiftSettings: concurrencySettings"
+flags = """            swiftSettings: concurrencySettings + [
+                .unsafeFlags([
+                    "-enable-library-evolution",
+                    "-emit-module-interface",
+                    "-no-verify-emitted-module-interface",
+                ])
+            ]"""
 assert needle in text, "target spelling changed; update emit-interface.sh"
 open(path, "w").write(text.replace(needle, flags, 1))
 PY

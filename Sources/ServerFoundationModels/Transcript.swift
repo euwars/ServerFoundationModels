@@ -129,6 +129,8 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         case image(ImageAttachment)
     }
 
+    /// @unchecked Sendable invariant: `CGImage` is a reference type; equality
+    /// compares bitmap bytes when instances differ. Linux stores `Data` instead.
     public struct ImageAttachment: @unchecked Sendable, Equatable {
         #if canImport(CoreGraphics)
         public var cgImage: CGImage

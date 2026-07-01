@@ -553,14 +553,18 @@ enum HTTPLineStream {
 }
 
 #if !canImport(Darwin)
+import Synchronization
+
 /// One shared URLSession for all SSE requests; the router delegate fans
 /// events out to per-task line streams. (Per-request URLSession instances
 /// churn file descriptors and worker threads under production load.)
+///
+/// @unchecked Sendable invariant: `handlers` is guarded by `Mutex`; delegate
+/// callbacks run on URLSession's queue and never escape handler references.
 final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = LinuxSSESession()
 
-    private let lock = NSLock()
-    private var handlers: [Int: LineStreamDelegate] = [:]
+    private let handlers = Mutex([Int: LineStreamDelegate]())
     // Eagerly created: a `lazy var` is not thread-safe, and a first-use race
     // from concurrent sessions can construct several URLSessions whose
     // per-session taskIdentifiers collide in `handlers`, routing events to
@@ -582,17 +586,13 @@ final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private func register(_ request: URLRequest) -> (LineStreamDelegate, URLSessionDataTask) {
         let handler = LineStreamDelegate()
         let task = session.dataTask(with: request)
-        lock.lock()
-        handlers[task.taskIdentifier] = handler
-        lock.unlock()
+        handlers.withLock { $0[task.taskIdentifier] = handler }
         handler.onTerminate = { [weak task] in task?.cancel() }
         return (handler, task)
     }
 
     private func handler(for task: URLSessionTask) -> LineStreamDelegate? {
-        lock.lock()
-        defer { lock.unlock() }
-        return handlers[task.taskIdentifier]
+        handlers.withLock { $0[task.taskIdentifier] }
     }
 
     func urlSession(
@@ -610,21 +610,24 @@ final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendab
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let finished = handler(for: task)
-        lock.lock()
-        handlers.removeValue(forKey: task.taskIdentifier)
-        lock.unlock()
+        handlers.withLock { $0.removeValue(forKey: task.taskIdentifier) }
         finished?.complete(error: error)
     }
 }
 #endif
 
 #if !canImport(Darwin)
+private struct LineStreamState {
+    var buffer = Data()
+    var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
+    var storedResponse: HTTPURLResponse?
+    var finishedEarly: (any Error)??
+}
+
+/// @unchecked Sendable invariant: stream state is guarded by `Mutex`;
+/// continuations are resumed outside the lock after being taken.
 final class LineStreamDelegate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    private var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
-    private var storedResponse: HTTPURLResponse?
-    private var finishedEarly: (any Error)??
+    private let state = Mutex(LineStreamState())
 
     var onTerminate: (@Sendable () -> Void)?
 
@@ -644,18 +647,30 @@ final class LineStreamDelegate: @unchecked Sendable {
         // cancellation error instead of stranding the continuation.
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.lock()
-                if let storedResponse {
-                    lock.unlock()
-                    continuation.resume(returning: storedResponse)
-                } else if let finishedEarly {
-                    lock.unlock()
-                    continuation.resume(throwing: finishedEarly ?? LanguageModelTransportError(
-                        statusCode: 0, message: "connection closed before a response arrived"
-                    ))
-                } else {
-                    responseContinuation = continuation
-                    lock.unlock()
+                enum Outcome {
+                    case stored(HTTPURLResponse)
+                    case failed(any Error)
+                    case pending
+                }
+                let outcome = state.withLock { snapshot -> Outcome in
+                    if let storedResponse = snapshot.storedResponse {
+                        return .stored(storedResponse)
+                    }
+                    if let finishedEarly = snapshot.finishedEarly {
+                        return .failed(finishedEarly ?? LanguageModelTransportError(
+                            statusCode: 0, message: "connection closed before a response arrived"
+                        ))
+                    }
+                    snapshot.responseContinuation = continuation
+                    return .pending
+                }
+                switch outcome {
+                case .stored(let response):
+                    continuation.resume(returning: response)
+                case .failed(let error):
+                    continuation.resume(throwing: error)
+                case .pending:
+                    break
                 }
             }
         } onCancel: {
@@ -664,11 +679,12 @@ final class LineStreamDelegate: @unchecked Sendable {
     }
 
     func receive(response: URLResponse) {
-        lock.lock()
-        storedResponse = response as? HTTPURLResponse
-        let continuation = responseContinuation
-        responseContinuation = nil
-        lock.unlock()
+        let continuation = state.withLock { snapshot -> CheckedContinuation<HTTPURLResponse, any Error>? in
+            snapshot.storedResponse = response as? HTTPURLResponse
+            let continuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            return continuation
+        }
         if let continuation {
             if let http = response as? HTTPURLResponse {
                 continuation.resume(returning: http)
@@ -681,32 +697,36 @@ final class LineStreamDelegate: @unchecked Sendable {
     }
 
     func receive(data: Data) {
-        lock.lock()
-        buffer.append(data)
-        var emitted: [String] = []
-        while let newline = buffer.firstIndex(of: 0x0A) {
-            let lineData = buffer[buffer.startIndex..<newline]
-            buffer.removeSubrange(buffer.startIndex...newline)
-            emitted.append(String(decoding: lineData, as: UTF8.self)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+        let emitted = state.withLock { snapshot -> [String] in
+            snapshot.buffer.append(data)
+            var lines: [String] = []
+            while let newline = snapshot.buffer.firstIndex(of: 0x0A) {
+                let lineData = snapshot.buffer[snapshot.buffer.startIndex..<newline]
+                snapshot.buffer.removeSubrange(snapshot.buffer.startIndex...newline)
+                lines.append(String(decoding: lineData, as: UTF8.self)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+            }
+            return lines
         }
-        lock.unlock()
         for line in emitted {
             lineContinuation.yield(line)
         }
     }
 
     func complete(error: (any Error)?) {
-        lock.lock()
-        if !buffer.isEmpty {
-            let trailing = String(decoding: buffer, as: UTF8.self)
-            buffer.removeAll()
-            lineContinuation.yield(trailing)
+        let trailing = state.withLock { snapshot -> String? in
+            guard !snapshot.buffer.isEmpty else { return nil }
+            let text = String(decoding: snapshot.buffer, as: UTF8.self)
+            snapshot.buffer.removeAll()
+            return text
         }
-        let continuation = responseContinuation
-        responseContinuation = nil
-        finishedEarly = .some(error)
-        lock.unlock()
+        if let trailing { lineContinuation.yield(trailing) }
+        let continuation = state.withLock { snapshot -> CheckedContinuation<HTTPURLResponse, any Error>? in
+            let continuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            snapshot.finishedEarly = .some(error)
+            return continuation
+        }
         if let continuation {
             continuation.resume(throwing: error ?? LanguageModelTransportError(
                 statusCode: 0, message: "connection closed before a response arrived"

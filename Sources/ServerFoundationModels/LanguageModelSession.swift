@@ -3,29 +3,24 @@
 // (SDK 27), generic over any LanguageModel via the executor contract.
 
 import Foundation
+import Synchronization
 
+/// @unchecked Sendable invariant: all mutable state lives in `state` and is
+/// accessed only through `Mutex.withLock`. `Transcript` and `Usage` are
+/// returned by copy; executor I/O runs in caller `async` contexts.
 public final class LanguageModelSession: @unchecked Sendable {
+
+    /// Mutable session fields guarded by a single `Mutex`.
+    private struct LockedSessionState {
+        var transcript: Transcript
+        var isResponding = false
+        var usage = Usage()
+        var errorPolicy: TranscriptErrorHandlingPolicy?
+    }
 
     // MARK: State
 
-    private let lock = NSLock()
-    private var _transcript: Transcript
-    private var _isResponding = false
-    private var _usage = Usage()
-    private var _errorPolicy: TranscriptErrorHandlingPolicy?
-
-    var errorPolicy: TranscriptErrorHandlingPolicy? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _errorPolicy
-        }
-        set {
-            lock.lock()
-            _errorPolicy = newValue
-            lock.unlock()
-        }
-    }
+    private let state: Mutex<LockedSessionState>
 
     /// Hard cap on executor rounds per turn; only runaway tool loops hit it.
     static let maximumToolRounds = 64
@@ -44,23 +39,22 @@ public final class LanguageModelSession: @unchecked Sendable {
     /// instructions via @SessionProperty.
     public let properties = SessionPropertyValues()
 
+    var errorPolicy: TranscriptErrorHandlingPolicy? {
+        get { state.withLock { $0.errorPolicy } }
+        set { state.withLock { $0.errorPolicy = newValue } }
+    }
+
     public var transcript: Transcript {
-        lock.lock()
-        defer { lock.unlock() }
-        return _transcript
+        state.withLock { $0.transcript }
     }
 
     public var isResponding: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return _isResponding
+        state.withLock { $0.isResponding }
     }
 
     /// Cumulative token usage across all requests on this session.
     public var usage: Usage {
-        lock.lock()
-        defer { lock.unlock() }
-        return _usage
+        state.withLock { $0.usage }
     }
 
     // MARK: Initializers
@@ -214,7 +208,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                 toolDefinitions: toolDefinitions
             )))
         }
-        self._transcript = initialTranscript
+        self.state = Mutex(LockedSessionState(transcript: initialTranscript))
     }
 
     public func prewarm(promptPrefix: Prompt? = nil) {
@@ -1282,35 +1276,31 @@ public final class LanguageModelSession: @unchecked Sendable {
     // MARK: Helpers
 
     private func appendEntry(_ entry: Transcript.Entry) {
-        lock.lock()
-        _transcript.append(entry)
-        lock.unlock()
+        state.withLock { $0.transcript.append(entry) }
     }
 
     private func recordUsage(_ usage: Usage) {
-        lock.lock()
-        _usage.input.totalTokenCount += usage.input.totalTokenCount
-        _usage.input.cachedTokenCount += usage.input.cachedTokenCount
-        _usage.output.totalTokenCount += usage.output.totalTokenCount
-        _usage.output.reasoningTokenCount += usage.output.reasoningTokenCount
-        lock.unlock()
+        state.withLock {
+            $0.usage.input.totalTokenCount += usage.input.totalTokenCount
+            $0.usage.input.cachedTokenCount += usage.input.cachedTokenCount
+            $0.usage.output.totalTokenCount += usage.output.totalTokenCount
+            $0.usage.output.reasoningTokenCount += usage.output.reasoningTokenCount
+        }
     }
 
     private func setResponding(_ value: Bool) {
-        lock.lock()
-        _isResponding = value
-        lock.unlock()
+        state.withLock { $0.isResponding = value }
     }
 
     private func beginResponding() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        if _isResponding {
-            throw GenerationError.concurrentRequests(.init(
-                debugDescription: "The session is already responding to a request."
-            ))
+        try state.withLock {
+            if $0.isResponding {
+                throw GenerationError.concurrentRequests(.init(
+                    debugDescription: "The session is already responding to a request."
+                ))
+            }
+            $0.isResponding = true
         }
-        _isResponding = true
     }
 
     /// Runs one turn under the responding gate: acquires the gate (throwing
@@ -1353,20 +1343,18 @@ public final class LanguageModelSession: @unchecked Sendable {
     }
 
     private func replaceTranscript(_ transcript: Transcript) {
-        lock.lock()
-        _transcript = transcript
-        lock.unlock()
+        state.withLock { $0.transcript = transcript }
     }
 
     /// Removes the entry with the given id and everything after it. A no-op
     /// when the entry is no longer present (e.g. a history transform already
     /// dropped it) — never truncates unrelated entries by position.
     private func revertTranscript(removingFrom entryID: String) {
-        lock.lock()
-        if let index = _transcript.allEntries.firstIndex(where: { $0.id == entryID }) {
-            _transcript = Transcript(entries: _transcript.allEntries.prefix(index))
+        state.withLock {
+            if let index = $0.transcript.allEntries.firstIndex(where: { $0.id == entryID }) {
+                $0.transcript = Transcript(entries: $0.transcript.allEntries.prefix(index))
+            }
         }
-        lock.unlock()
     }
 
     static func stripCodeFences(from text: String) -> String {
@@ -1485,6 +1473,9 @@ public final class LanguageModelSession: @unchecked Sendable {
 /// configuration) pair, however many sessions or re-evaluated profile bodies
 /// ask for it — `.model(...)` inside a dynamic profile must not construct a
 /// new executor (and e.g. a new HTTP connection pool) on every request.
+/// @unchecked Sendable invariant: the executor cache is guarded by `NSLock`;
+/// cached executors are `Sendable` language-model transports. (`Mutex` is avoided:
+/// type-erased `Any` values trip region isolation under complete checking.)
 final class SharedExecutorRegistry: @unchecked Sendable {
     static let shared = SharedExecutorRegistry()
 

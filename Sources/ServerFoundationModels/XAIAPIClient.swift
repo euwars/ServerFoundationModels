@@ -129,11 +129,14 @@ enum XAIHTTPClient {
 }
 
 #if !canImport(Darwin) && !AsyncHTTPClient
+import Synchronization
+
+/// @unchecked Sendable invariant: `handlers` is guarded by `Mutex`; delegate
+/// callbacks run on URLSession's queue and never escape handler references.
 final class LinuxDataSession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = LinuxDataSession()
 
-    private let lock = NSLock()
-    private var handlers: [Int: DataStreamDelegate] = [:]
+    private let handlers = Mutex([Int: DataStreamDelegate]())
     private var session: URLSession!
 
     private override init() {
@@ -144,17 +147,13 @@ final class LinuxDataSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     func register(_ request: URLRequest) -> (DataStreamDelegate, URLSessionDataTask) {
         let handler = DataStreamDelegate()
         let task = session.dataTask(with: request)
-        lock.lock()
-        handlers[task.taskIdentifier] = handler
-        lock.unlock()
+        handlers.withLock { $0[task.taskIdentifier] = handler }
         handler.onTerminate = { [weak task] in task?.cancel() }
         return (handler, task)
     }
 
     private func handler(for task: URLSessionTask) -> DataStreamDelegate? {
-        lock.lock()
-        defer { lock.unlock() }
-        return handlers[task.taskIdentifier]
+        handlers.withLock { $0[task.taskIdentifier] }
     }
 
     func urlSession(
@@ -172,36 +171,51 @@ final class LinuxDataSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let finished = handler(for: task)
-        lock.lock()
-        handlers.removeValue(forKey: task.taskIdentifier)
-        lock.unlock()
+        handlers.withLock { $0.removeValue(forKey: task.taskIdentifier) }
         finished?.complete(error: error)
     }
 }
 
+private struct DataStreamState {
+    var buffer = Data()
+    var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
+    var storedResponse: HTTPURLResponse?
+    var bodyContinuation: CheckedContinuation<Data, any Error>?
+    var finishedEarly: (any Error)?
+}
+
+/// @unchecked Sendable invariant: stream state is guarded by `Mutex`;
+/// continuations are resumed outside the lock after being taken.
 final class DataStreamDelegate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    private var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
-    private var storedResponse: HTTPURLResponse?
-    private var bodyContinuation: CheckedContinuation<Data, any Error>?
-    private var finishedEarly: (any Error)?
+    private let state = Mutex(DataStreamState())
 
     var onTerminate: (@Sendable () -> Void)?
 
     func response() async throws -> HTTPURLResponse {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.lock()
-                if let storedResponse {
-                    lock.unlock()
-                    continuation.resume(returning: storedResponse)
-                } else if let finishedEarly {
-                    lock.unlock()
-                    continuation.resume(throwing: finishedEarly)
-                } else {
-                    responseContinuation = continuation
-                    lock.unlock()
+                enum Outcome {
+                    case stored(HTTPURLResponse)
+                    case failed(any Error)
+                    case pending
+                }
+                let outcome = state.withLock { snapshot -> Outcome in
+                    if let storedResponse = snapshot.storedResponse {
+                        return .stored(storedResponse)
+                    }
+                    if let finishedEarly = snapshot.finishedEarly {
+                        return .failed(finishedEarly)
+                    }
+                    snapshot.responseContinuation = continuation
+                    return .pending
+                }
+                switch outcome {
+                case .stored(let response):
+                    continuation.resume(returning: response)
+                case .failed(let error):
+                    continuation.resume(throwing: error)
+                case .pending:
+                    break
                 }
             }
         } onCancel: {
@@ -212,15 +226,16 @@ final class DataStreamDelegate: @unchecked Sendable {
     func collectBody() async throws -> Data {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.lock()
-                bodyContinuation = continuation
-                if let finishedEarly {
-                    let error = finishedEarly
-                    bodyContinuation = nil
-                    lock.unlock()
-                    continuation.resume(throwing: error)
-                } else {
-                    lock.unlock()
+                let earlyError = state.withLock { snapshot -> (any Error)? in
+                    snapshot.bodyContinuation = continuation
+                    if let finishedEarly = snapshot.finishedEarly {
+                        snapshot.bodyContinuation = nil
+                        return finishedEarly
+                    }
+                    return nil
+                }
+                if let earlyError {
+                    continuation.resume(throwing: earlyError)
                 }
             }
         } onCancel: {
@@ -229,11 +244,12 @@ final class DataStreamDelegate: @unchecked Sendable {
     }
 
     func receive(response: URLResponse) {
-        lock.lock()
-        storedResponse = response as? HTTPURLResponse
-        let continuation = responseContinuation
-        responseContinuation = nil
-        lock.unlock()
+        let continuation = state.withLock { snapshot -> CheckedContinuation<HTTPURLResponse, any Error>? in
+            snapshot.storedResponse = response as? HTTPURLResponse
+            let continuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            return continuation
+        }
         if let continuation {
             if let http = response as? HTTPURLResponse {
                 continuation.resume(returning: http)
@@ -246,19 +262,19 @@ final class DataStreamDelegate: @unchecked Sendable {
     }
 
     func receive(data: Data) {
-        lock.lock()
-        buffer.append(data)
-        lock.unlock()
+        state.withLock { $0.buffer.append(data) }
     }
 
     func complete(error: (any Error)?) {
-        lock.lock()
-        let body = buffer
-        let continuation = bodyContinuation
-        bodyContinuation = nil
-        let responseContinuation = responseContinuation
-        self.responseContinuation = nil
-        lock.unlock()
+        let (body, bodyContinuation, responseContinuation) = state.withLock {
+            snapshot -> (Data, CheckedContinuation<Data, any Error>?, CheckedContinuation<HTTPURLResponse, any Error>?) in
+            let body = snapshot.buffer
+            let bodyContinuation = snapshot.bodyContinuation
+            snapshot.bodyContinuation = nil
+            let responseContinuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            return (body, bodyContinuation, responseContinuation)
+        }
 
         if let responseContinuation {
             responseContinuation.resume(throwing: error ?? LanguageModelTransportError(

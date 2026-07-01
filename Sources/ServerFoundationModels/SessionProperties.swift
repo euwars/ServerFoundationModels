@@ -11,6 +11,9 @@ public protocol SessionPropertyKey: SendableMetatype {
     static var defaultValue: Value { get }
 }
 
+/// @unchecked Sendable invariant: `storage` is guarded by `NSLock`; reads return
+/// copies or immutable defaults. Instances are bound per-session via `@TaskLocal`.
+/// (`Mutex` is avoided here: `Any`-typed values trip region isolation under complete checking.)
 public final class SessionPropertyValues: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [ObjectIdentifier: Any] = [:]
@@ -110,6 +113,8 @@ extension LanguageModelSession {
     }
 }
 
+/// @unchecked Sendable invariant: `keyPath` is immutable after init and only
+/// used to read/write through `@TaskLocal`-bound `SessionPropertyValues`.
 extension LanguageModelSession.SessionProperty: @unchecked Sendable where Value: Sendable {}
 
 extension Tool {

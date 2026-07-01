@@ -26,6 +26,8 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
         public static let permissiveContentTransformations = Guardrails(raw: "permissiveContentTransformations")
     }
 
+    /// @unchecked Sendable invariant: the `.adapter` case may wrap Apple's
+    /// non-Sendable adapter handle on iOS; access is read-only after init.
     enum Variant: @unchecked Sendable {
         case useCase(UseCase, Guardrails)
         case adapter(Adapter, Guardrails)
@@ -208,6 +210,8 @@ extension SystemLanguageModel {
 extension SystemLanguageModel {
     // Apple marks adapters unavailable on macOS; they are live on iOS-class
     // platforms only. Elsewhere the initializers throw.
+    /// @unchecked Sendable invariant: wraps Apple's adapter reference on iOS;
+    /// `creatorDefinedMetadata` uses `[String: Any]` matching the Apple API.
     public struct Adapter: @unchecked Sendable {
         #if canImport(FoundationModels) && !os(macOS)
         let fmAdapter: FoundationModels.SystemLanguageModel.Adapter
