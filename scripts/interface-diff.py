@@ -24,7 +24,11 @@ ALLOWLIST_PATTERNS = [
     r"^SystemLanguageModel\.Adapter\b.*",          # FM-backed off-macOS; throws elsewhere
     r"^Transcript\.ImageAttachment\b.*pixelBuffer", # var vs throwing func returning CVReadOnlyPixelBuffer
     r"^GenerationGuide\b.*pattern",                 # Regex source not extractable; advisory
-    r".*PartiallyGenerated.*",                      # macro-synthesized per-type; verified behaviorally
+    # @Generable macro expansion: nested PartiallyGenerated struct + members only
+    r"^struct \w+\.PartiallyGenerated$",
+    r"^[\w.]+\.PartiallyGenerated\.var id: GenerationID$",
+    r"^[\w.]+\.PartiallyGenerated\.var \w+: [\w.]+\.PartiallyGenerated\?$",
+    r"^[\w.]+\.PartiallyGenerated\.init \(_ generatedContent: GeneratedContent\) throws$",
     r"^Transcript\.Segment\.custom\b.*",            # existential spelling differs in emission
     # Apple-graphics-typed API (CGImage/CIImage/CVPixelBuffer) does not exist
     # off Apple platforms — matching FoundationModels itself.

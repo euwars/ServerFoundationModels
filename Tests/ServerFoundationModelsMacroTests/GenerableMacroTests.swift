@@ -678,4 +678,943 @@ final class GenerableMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    // MARK: — optional properties
+
+    func testOptionalSugarSpelling() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                var name: String?
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var name: String?
+
+                init(name: String? = nil) {
+                        self.name = name
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.name = try generatedContent.value(String?.self, forProperty: "name")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "name": self.name
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "name", description: nil, type: String?.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var name: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testOptionalGenericSpelling() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                var name: Optional<String>
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var name: Optional<String>
+
+                init(name: Optional<String> = nil) {
+                        self.name = name
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.name = try generatedContent.value(String?.self, forProperty: "name")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "name": self.name
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "name", description: nil, type: String?.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var name: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — nested array partial translation
+
+    func testArrayOfNestedGenerableType() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct Outer {
+                var items: [Inner]
+            }
+            """,
+            expandedSource: """
+            struct Outer {
+                var items: [Inner]
+
+                init(items: [Inner]) {
+                        self.items = items
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.items = try generatedContent.value([Inner].self, forProperty: "items")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "items": self.items
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "items", description: nil, type: [Inner].self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var items: [Inner.PartiallyGenerated]?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.items = try? generatedContent.value(Optional<[Inner.PartiallyGenerated]>.self, forProperty: "items") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — type-level description
+
+    func testTypeLevelDescription() {
+        assertMacroExpansion(
+            """
+            @Generable(description: "A person")
+            struct Person {
+                var name: String
+            }
+            """,
+            expandedSource: """
+            struct Person {
+                var name: String
+
+                init(name: String) {
+                        self.name = name
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.name = try generatedContent.value(String.self, forProperty: "name")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "name": self.name
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: "A person",
+                        properties: [
+                            GenerationSchema.Property(name: "name", description: nil, type: String.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var name: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — empty struct
+
+    func testEmptyStruct() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct Empty {}
+            """,
+            expandedSource: """
+            struct Empty {
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        _ = generatedContent
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [:])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        _ = generatedContent
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — non-regex guide pass-through
+
+    func testRangeAndCountGuidesPassThrough() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                @Guide(description: "a score", .range(0...100), .count(1...5))
+                var scores: [Int]
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var scores: [Int]
+
+                init(scores: [Int]) {
+                        self.scores = scores
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.scores = try generatedContent.value([Int].self, forProperty: "scores")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "scores": self.scores
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "scores", description: "a score", type: [Int].self, guides: [.range(0...100), .count(1...5)])
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var scores: [Int.PartiallyGenerated]?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.scores = try? generatedContent.value(Optional<[Int.PartiallyGenerated]>.self, forProperty: "scores") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — .pattern(/regex/) rewrite
+
+    func testPatternCallWithRegexLiteral() {
+        assertMacroExpansion(
+            #"""
+            @Generable
+            struct S {
+                @Guide(description: "digits", .pattern(/\d+/))
+                var code: String
+            }
+            """#,
+            expandedSource: #"""
+            struct S {
+                var code: String
+
+                init(code: String) {
+                        self.code = code
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.code = try generatedContent.value(String.self, forProperty: "code")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "code": self.code
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "code", description: "digits", type: String.self, guides: [.pattern("\\d+")])
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var code: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.code = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "code") ?? nil
+                    }
+                }
+            }
+            """#,
+            macros: macros
+        )
+    }
+
+    // MARK: — let without initializer
+
+    func testLetWithoutInitializerIsIncluded() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                let name: String
+                var age: Int
+            }
+            """,
+            expandedSource: """
+            struct S {
+                let name: String
+                var age: Int
+
+                init(name: String, age: Int) {
+                        self.name = name
+                        self.age = age
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.name = try generatedContent.value(String.self, forProperty: "name")
+                        self.age = try generatedContent.value(Int.self, forProperty: "age")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "name": self.name,
+                            "age": self.age
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "name", description: nil, type: String.self),
+                            GenerationSchema.Property(name: "age", description: nil, type: Int.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var name: String.PartiallyGenerated?
+                    var age: Int.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                        self.age = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "age") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — package access level
+
+    func testPackageAccessLevel() {
+        assertMacroExpansion(
+            """
+            @Generable
+            package struct S {
+                var v: Int
+            }
+            """,
+            expandedSource: """
+            package struct S {
+                var v: Int
+
+                package init(v: Int) {
+                        self.v = v
+                }
+
+                package init(_ generatedContent: GeneratedContent) throws {
+                        self.v = try generatedContent.value(Int.self, forProperty: "v")
+                }
+
+                package var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "v": self.v
+                    ])
+                }
+
+                package static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "v", description: nil, type: Int.self)
+                        ]
+                    )
+                }
+
+                package struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    package var id: GenerationID
+                    package var v: Int.PartiallyGenerated?
+
+                    package init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.v = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "v") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — Int raw-value enum warning
+
+    func testIntRawValueEnumEmitsWarning() {
+        assertMacroExpansion(
+            """
+            @Generable
+            enum Priority: Int {
+                case low = 1
+                case high = 2
+            }
+            """,
+            expandedSource: """
+            enum Priority: Int {
+                case low = 1
+                case high = 2
+
+                init(_ generatedContent: GeneratedContent) throws {
+                    let rawValue = try generatedContent.value(String.self)
+                    switch rawValue {
+                        case "low":
+                        self = .low
+                        case "high":
+                        self = .high
+                    default:
+                        throw GeneratedContentError("'\\(rawValue)' is not a valid Priority")
+                    }
+                }
+
+                var generatedContent: GeneratedContent {
+                    let rawValue: String
+                    switch self {
+                        case .low:
+                        rawValue = "low"
+                        case .high:
+                        rawValue = "high"
+                    }
+                    return rawValue.generatedContent
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(type: Self.self, description: nil, anyOf: ["low", "high"])
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable uses enum case names on the wire; non-String raw values are ignored",
+                    line: 2,
+                    column: 6,
+                    severity: .warning
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    // MARK: — memberwise init default values
+
+    func testMemberwiseInitDefaultValues() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                var x: Int = 5
+                var y: String?
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var x: Int = 5
+                var y: String?
+
+                init(x: Int = 5, y: String? = nil) {
+                        self.x = x
+                        self.y = y
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.x = try generatedContent.value(Int.self, forProperty: "x")
+                        self.y = try generatedContent.value(String?.self, forProperty: "y")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "x": self.x,
+                            "y": self.y
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "x", description: nil, type: Int.self),
+                            GenerationSchema.Property(name: "y", description: nil, type: String?.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var x: Int.PartiallyGenerated?
+                    var y: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.x = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "x") ?? nil
+                        self.y = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "y") ?? nil
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    // MARK: — diagnostics
+
+    func testClassAttachmentEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            class C {
+                var x: Int
+            }
+            """,
+            expandedSource: """
+            class C {
+                var x: Int
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable currently supports structs and enums",
+                    line: 2,
+                    column: 1
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testActorAttachmentEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            actor A {
+                var x: Int
+            }
+            """,
+            expandedSource: """
+            actor A {
+                var x: Int
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable currently supports structs and enums",
+                    line: 2,
+                    column: 1
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testEnumAssociatedValuesEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            enum E {
+                case foo(Int)
+            }
+            """,
+            expandedSource: """
+            enum E {
+                case foo(Int)
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable enums with associated values are not supported yet",
+                    line: 3,
+                    column: 5
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testTuplePatternEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                var (a, b): (Int, Int)
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var (a, b): (Int, Int)
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        _ = generatedContent
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [:])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        _ = generatedContent
+                    }
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable does not support tuple-pattern properties",
+                    line: 3,
+                    column: 9
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testImplicitlyUnwrappedOptionalEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                var s: String!
+            }
+            """,
+            expandedSource: """
+            struct S {
+                var s: String!
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        _ = generatedContent
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [:])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        _ = generatedContent
+                    }
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable does not support implicitly unwrapped optional properties",
+                    line: 3,
+                    column: 12
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testLazyPropertyEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                lazy var x: Int = 0
+            }
+            """,
+            expandedSource: """
+            struct S {
+                lazy var x: Int = 0
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        _ = generatedContent
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [:])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        _ = generatedContent
+                    }
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable does not support lazy stored properties",
+                    line: 3,
+                    column: 5
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testDuplicateGuideEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            @Generable
+            struct S {
+                @Guide(description: "first")
+                @Guide(description: "second")
+                var s: String
+            }
+            """,
+            expandedSource: """
+            struct S {
+                @Guide(description: "first")
+                @Guide(description: "second")
+                var s: String
+
+                init(s: String) {
+                        self.s = s
+                }
+
+                init(_ generatedContent: GeneratedContent) throws {
+                        self.s = try generatedContent.value(String.self, forProperty: "s")
+                }
+
+                var generatedContent: GeneratedContent {
+                    GeneratedContent(properties: [
+                            "s": self.s
+                    ])
+                }
+
+                static var generationSchema: GenerationSchema {
+                    GenerationSchema(
+                        type: Self.self,
+                        description: nil,
+                        properties: [
+                            GenerationSchema.Property(name: "s", description: "first", type: String.self)
+                        ]
+                    )
+                }
+
+                struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
+                    var id: GenerationID
+                    var s: String.PartiallyGenerated?
+
+                    init(_ generatedContent: GeneratedContent) throws {
+                        self.id = generatedContent.id ?? GenerationID()
+                        self.s = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "s") ?? nil
+                    }
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Generable supports only one @Guide attribute per property",
+                    line: 4,
+                    column: 5
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testSessionPropertyEntryMultipleBindingsEmitsDiagnostic() {
+        assertMacroExpansion(
+            """
+            extension SessionPropertyValues {
+                @SessionPropertyEntry
+                var a: Int = 1, b: Int = 2
+            }
+            """,
+            expandedSource: """
+            extension SessionPropertyValues {
+                var a: Int = 1, b: Int = 2
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@SessionPropertyEntry does not support multiple bindings in one declaration",
+                    line: 3,
+                    column: 5
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func testSessionPropertyEntryBacktickedName() {
+        assertMacroExpansion(
+            """
+            extension SessionPropertyValues {
+                @SessionPropertyEntry
+                var `class`: Int = 1
+            }
+            """,
+            expandedSource: """
+            extension SessionPropertyValues {
+                var `class`: Int {
+                    get {
+                        self[__Key_class.self]
+                    }
+                    set {
+                        self[__Key_class.self] = newValue
+                    }
+                }
+
+                struct __Key_class: SessionPropertyKey {
+                    static var defaultValue: Int {
+                        1
+                    }
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
 }

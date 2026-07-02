@@ -1,5 +1,8 @@
 # Server framework compatibility (production Linux)
 
+*Historical run log (2026-06-12): private endpoint `10.0.0.200:8000` is from
+the author's one-off proof — not reproducible by readers without equivalent setup.*
+
 Proof, 2026-06-12, `swift:6.2` container with `10.0.0.200:8000` as a pure
 HTTP inference endpoint (`qwen3.6-35b-a3b`). Smoke servers live in
 `integration/`; each builds ServerFoundationModels as a path dependency and serves

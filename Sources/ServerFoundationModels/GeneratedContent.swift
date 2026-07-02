@@ -143,17 +143,17 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
 
     public init(kind: Kind, id: GenerationID? = nil) {
         switch kind {
-        case .null: self.init(node: .null)
-        case .bool(let value): self.init(node: .bool(value))
+        case .null: self.init(node: .null, id: id)
+        case .bool(let value): self.init(node: .bool(value), id: id)
         case .number(let value):
             self.init(node: value == value.rounded() && value.magnitude < 1e15
-                ? .integer(Int(value)) : .number(value))
-        case .string(let value): self.init(node: .string(value))
-        case .array(let elements): self.init(node: .array(elements.map(\.node)))
+                ? .integer(Int(value)) : .number(value), id: id)
+        case .string(let value): self.init(node: .string(value), id: id)
+        case .array(let elements): self.init(node: .array(elements.map(\.node)), id: id)
         case .structure(let properties, let orderedKeys):
             self.init(node: .object(orderedKeys.compactMap { key in
                 properties[key].map { JSONNode.Member(key: key, value: $0.node) }
-            }))
+            }), id: id)
         }
     }
 

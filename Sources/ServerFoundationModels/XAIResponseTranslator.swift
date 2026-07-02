@@ -31,7 +31,7 @@ enum XAIResponseTranslator {
                     let messageText = XAIServerToolWire.messageText(from: item)
                     if !messageText.isEmpty { textParts.append(messageText) }
                 case "function_call":
-                    let id = stringValue(item["id"]) ?? stringValue(item["call_id"]) ?? UUID().uuidString
+                    let id = stringValue(item["call_id"]) ?? stringValue(item["id"]) ?? UUID().uuidString
                     let name = stringValue(item["name"]) ?? ""
                     let arguments = stringValue(item["arguments"]) ?? "{}"
                     toolCalls.append((id: id, name: name, arguments: arguments))

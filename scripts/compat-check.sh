@@ -10,18 +10,29 @@ LF_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="${1:-/tmp/lf-compat}"
 mkdir -p "$CACHE"
 
+# Pinned 2026-07-02 via `git ls-remote <repo> HEAD`
+CLAUDE_FM_COMMIT=7559ecdf6315c5bc384c7b5a1a8976654d768c4f
+FMU_COMMIT=a047a503b8ec79a76aa0e83d5a3bac54493cc7e5
+
+sed_inplace() {
+  local expr="$1" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sed -i.bak "$expr" "$f" && rm -f "$f.bak"
+  done
+}
+
 swap_imports() {
   local dir="$1"
   grep -rl 'import FoundationModels' "$dir"/Sources "$dir"/Tests "$dir"/Examples 2>/dev/null \
-    | xargs sed -i '' \
-      's/public import FoundationModels/public import ServerFoundationModels/g; s/import FoundationModels/import ServerFoundationModels/g' || true
+    | sed_inplace 's/public import FoundationModels/public import ServerFoundationModels/g; s/import FoundationModels/import ServerFoundationModels/g' || true
   grep -rl 'FoundationModels::' "$dir"/Sources "$dir"/Tests 2>/dev/null \
-    | xargs sed -i '' 's/FoundationModels::/ServerFoundationModels::/g' || true
+    | sed_inplace 's/FoundationModels::/ServerFoundationModels::/g' || true
   grep -rl 'FoundationModels\.' "$dir"/Sources "$dir"/Tests 2>/dev/null \
-    | xargs sed -i '' 's/FoundationModels\./ServerFoundationModels./g' || true
+    | sed_inplace 's/FoundationModels\./ServerFoundationModels./g' || true
   # repair over-matched module names
   grep -rl 'ServerFoundationModelsUtilities' "$dir" 2>/dev/null \
-    | xargs sed -i '' 's/ServerFoundationModelsUtilities/FoundationModelsUtilities/g' || true
+    | sed_inplace 's/ServerFoundationModelsUtilities/FoundationModelsUtilities/g' || true
 }
 
 add_dependency() {
@@ -44,19 +55,28 @@ PYEOF
 }
 
 run() {
-  local name="$1" url="$2" target="$3" filter="${4:-}"
+  local name="$1" url="$2" commit="$3" target="$4" filter="${5:-}"
   local dir="$CACHE/$name"
   rm -rf "$dir"
-  git clone -q --depth 1 "$url" "$dir"
+  git clone -q "$url" "$dir"
+  (cd "$dir" && git fetch --depth 1 origin "$commit" && git checkout "$commit")
   rm -rf "$dir/.git"
   swap_imports "$dir"
   add_dependency "$dir" "$target"
   echo "=== $name: building + testing against ServerFoundationModels"
-  (cd "$dir" && swift test --build-system native ${filter:+--filter "$filter"} 2>&1 | tail -1)
+  local log
+  log=$(mktemp)
+  if ! (cd "$dir" && swift test --build-system native ${filter:+--filter "$filter"} >"$log" 2>&1); then
+    echo "=== $name: FAILED (last 30 lines)" >&2
+    tail -30 "$log" >&2
+    rm -f "$log"
+    exit 1
+  fi
+  rm -f "$log"
 }
 
 run claude-for-foundation-models https://github.com/anthropics/ClaudeForFoundationModels \
-  ClaudeForFoundationModels ClaudeForFoundationModelsTests
+  "$CLAUDE_FM_COMMIT" ClaudeForFoundationModels ClaudeForFoundationModelsTests
 run foundation-models-utilities https://github.com/apple/foundation-models-utilities \
-  FoundationModelsUtilities
+  "$FMU_COMMIT" FoundationModelsUtilities
 echo "=== compat check complete"

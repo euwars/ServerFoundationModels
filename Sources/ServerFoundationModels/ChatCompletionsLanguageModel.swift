@@ -87,6 +87,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         ) async throws {
             let logger = model.logger
             let urlRequest = try makeURLRequest(for: request)
+            Self.warnIfPlainHTTPAuthorization(
+                endpoint: endpoint, headers: configuration.additionalHeaders, logger: logger
+            )
             logger.debug("chat.completions request", metadata: [
                 "model": .string(configuration.modelName),
                 "host": .string(urlRequest.url?.host ?? "?"),
@@ -95,27 +98,23 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             ])
             let (lines, response) = try await HTTPLineStream.connect(urlRequest)
 
-            if response.statusCode != 200 {
-                var body = ""
+            if !(200..<300).contains(response.statusCode) {
+                var bodyLines: [String] = []
                 for try await line in lines {
-                    body += line
-                    if body.count > 4096 { break }
+                    bodyLines.append(line)
+                    if bodyLines.joined(separator: "\n").count > 4096 { break }
                 }
+                let body = bodyLines.joined(separator: "\n")
                 logger.warning("chat.completions error response", metadata: [
                     "status": .stringConvertible(response.statusCode),
                     "body": .string(String(body.prefix(256))),
                 ])
                 if response.statusCode == 429 {
                     let resetDate = response.value(forHTTPHeaderField: "Retry-After")
-                        .flatMap(Self.parseRetryAfter)
+                        .flatMap { HTTPErrorHeuristics.retryAfterDate(fromHeaderValue: $0) }
                     throw LanguageModelError.rateLimited(.init(resetDate: resetDate, debugDescription: body))
                 }
-                // Providers report context overflow as a 400/413 mentioning
-                // the context/token limit; surface it as the typed error.
-                let lowered = body.lowercased()
-                if [400, 413].contains(response.statusCode),
-                    lowered.contains("context") || lowered.contains("maximum length"),
-                    lowered.contains("token") || lowered.contains("length") || lowered.contains("window") {
+                if HTTPErrorHeuristics.isContextOverflow(statusCode: response.statusCode, body: body) {
                     throw LanguageModelError.contextSizeExceeded(.init(
                         contextSize: 0, tokenCount: 0, debugDescription: body
                     ))
@@ -226,9 +225,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                         debugDescription: "provider stopped generation with finish_reason=content_filter"
                     ))
                 case "length":
-                    logger.warning("response truncated by provider", metadata: [
-                        "finish_reason": .string("length")
-                    ])
+                    logger.warning(
+                        "response truncated by provider; guided-generation output may fail JSON decoding",
+                        metadata: ["finish_reason": .string("length")]
+                    )
                 default:
                     break
                 }
@@ -276,17 +276,23 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             }
         }
 
-        /// RFC 7231 `Retry-After`: either delta-seconds or an HTTP-date.
-        static func parseRetryAfter(_ value: String) -> Date? {
-            let trimmed = value.trimmingCharacters(in: .whitespaces)
-            if let seconds = Double(trimmed) {
-                return Date(timeIntervalSinceNow: seconds)
+        private static let plainHTTPAuthWarningLock = NSLock()
+        private static var plainHTTPAuthWarningLogged = false
+
+        static func warnIfPlainHTTPAuthorization(
+            endpoint: URL, headers: [String: String], logger: Logger
+        ) {
+            guard endpoint.scheme?.lowercased() == "http",
+                headers.contains(where: { $0.key.lowercased() == "authorization" }) else { return }
+            plainHTTPAuthWarningLock.lock()
+            let shouldLog = !plainHTTPAuthWarningLogged
+            if shouldLog { plainHTTPAuthWarningLogged = true }
+            plainHTTPAuthWarningLock.unlock()
+            if shouldLog {
+                logger.warning("sending Authorization header over plain HTTP", metadata: [
+                    "host": .string(endpoint.host ?? "?"),
+                ])
             }
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = TimeZone(identifier: "GMT")
-            return formatter.date(from: trimmed)
         }
 
         // MARK: Request construction
@@ -298,6 +304,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             for (header, value) in configuration.additionalHeaders {
+                precondition(
+                    !value.contains(where: { $0 == "\n" || $0 == "\r" }),
+                    "additionalHeaders values must not contain newline characters"
+                )
                 urlRequest.setValue(value, forHTTPHeaderField: header)
             }
             let bodyNode = makeBody(for: request)
@@ -503,13 +513,12 @@ extension JSONNode {
 /// Streams an HTTP response body line by line. Darwin uses `URLSession.bytes`;
 /// Linux corelibs lacks it, so a data-delegate feeds an AsyncThrowingStream.
 enum HTTPLineStream {
-    /// Hoisted so SSE line splitting doesn't allocate a `CharacterSet` per line.
-    static let carriageReturn = CharacterSet(charactersIn: "\r")
-
-    /// Decodes one raw SSE line (without its terminating `\n`), stripping a
-    /// trailing `\r` from `\r\n` framing.
+    /// Decodes one raw SSE line (without its terminating `\n`), stripping at
+    /// most one trailing `\r` from `\r\n` framing per the SSE spec.
     static func decodeLine(_ bytes: some Collection<UInt8>) -> String {
-        String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: carriageReturn)
+        var line = String(decoding: bytes, as: UTF8.self)
+        if line.last == "\r" { line.removeLast() }
+        return line
     }
 
     static func connect(_ request: URLRequest) async throws -> (AsyncThrowingStream<String, any Error>, HTTPURLResponse) {
@@ -537,7 +546,7 @@ enum HTTPLineStream {
                     }
                 }
                 if !buffer.isEmpty {
-                    continuation.yield(String(decoding: buffer, as: UTF8.self))
+                    continuation.yield(decodeLine(buffer))
                 }
                 continuation.finish()
             } catch {
@@ -684,11 +693,14 @@ final class LineStreamDelegate: @unchecked Sendable {
         lock.lock()
         buffer.append(data)
         var emitted: [String] = []
-        while let newline = buffer.firstIndex(of: 0x0A) {
-            let lineData = buffer[buffer.startIndex..<newline]
-            buffer.removeSubrange(buffer.startIndex...newline)
-            emitted.append(String(decoding: lineData, as: UTF8.self)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+        var lineStart = buffer.startIndex
+        while lineStart < buffer.endIndex,
+            let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
+            emitted.append(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
+            lineStart = buffer.index(after: newline)
+        }
+        if lineStart != buffer.startIndex {
+            buffer.removeSubrange(buffer.startIndex..<lineStart)
         }
         lock.unlock()
         for line in emitted {
@@ -699,7 +711,7 @@ final class LineStreamDelegate: @unchecked Sendable {
     func complete(error: (any Error)?) {
         lock.lock()
         if !buffer.isEmpty {
-            let trailing = String(decoding: buffer, as: UTF8.self)
+            let trailing = HTTPLineStream.decodeLine(buffer)
             buffer.removeAll()
             lineContinuation.yield(trailing)
         }
@@ -769,12 +781,14 @@ extension HTTPLineStream {
             httpRequest.body = .bytes(ByteBuffer(bytes: body))
         }
 
-        // Semantic difference: URLRequest.timeoutInterval is URLSession's
-        // idle (between-bytes) timeout, while AsyncHTTPClient's `timeout` is
-        // a total deadline for the whole request. Millisecond precision so
-        // sub-second values are not truncated to 0.
-        let timeout = TimeAmount.milliseconds(Int64((request.timeoutInterval * 1000).rounded()))
-        let response = try await client.execute(httpRequest, timeout: timeout)
+        // URLRequest.timeoutInterval is an idle (between-bytes) timeout on
+        // URLSession. AsyncHTTPClient's execute `timeout` is a total deadline,
+        // so confine it to connect + response headers; body bytes are guarded
+        // by a per-chunk idle watchdog below.
+        let idleTimeout = request.timeoutInterval
+        let idleNanos = UInt64((idleTimeout * 1_000_000_000).rounded())
+        let headDeadline = TimeAmount.milliseconds(Int64((idleTimeout * 1000).rounded()))
+        let response = try await client.execute(httpRequest, timeout: headDeadline)
         guard let httpResponse = HTTPURLResponse(
             url: url, statusCode: Int(response.status.code), httpVersion: nil,
             headerFields: Dictionary(response.headers.map { ($0.name, $0.value) }, uniquingKeysWith: { first, _ in first })
@@ -783,10 +797,27 @@ extension HTTPLineStream {
         }
 
         let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
-        let pump = Task {
+        var pump: Task<Void, any Error>!
+        pump = Task {
             var buffer = Data()
+            var idleWatchdog: Task<Void, Never>?
+            defer { idleWatchdog?.cancel() }
+
+            func armIdleWatchdog() {
+                idleWatchdog?.cancel()
+                idleWatchdog = Task {
+                    try? await Task.sleep(nanoseconds: idleNanos)
+                    guard !Task.isCancelled else { return }
+                    pump.cancel()
+                    continuation.finish(throwing: URLError(.timedOut))
+                }
+            }
+
             do {
+                armIdleWatchdog()
                 for try await chunk in response.body {
+                    idleWatchdog?.cancel()
+                    try Task.checkCancellation()
                     buffer.append(contentsOf: chunk.readableBytesView)
                     // Advance a cursor over the buffered bytes and compact the
                     // consumed prefix once per chunk. Removing each line from the
@@ -800,17 +831,24 @@ extension HTTPLineStream {
                     if lineStart != buffer.startIndex {
                         buffer.removeSubrange(buffer.startIndex..<lineStart)
                     }
+                    armIdleWatchdog()
                 }
+                idleWatchdog?.cancel()
                 if !buffer.isEmpty {
-                    continuation.yield(String(decoding: buffer, as: UTF8.self))
+                    continuation.yield(HTTPLineStream.decodeLine(buffer))
                 }
                 continuation.finish()
+            } catch is CancellationError {
+                idleWatchdog?.cancel()
             } catch {
+                idleWatchdog?.cancel()
                 continuation.finish(throwing: error)
             }
         }
         continuation.onTermination = { reason in
-            if case .cancelled = reason { pump.cancel() }
+            if case .cancelled = reason {
+                pump.cancel()
+            }
         }
         return (stream, httpResponse)
     }

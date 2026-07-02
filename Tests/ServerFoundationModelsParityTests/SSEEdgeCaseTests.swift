@@ -116,4 +116,16 @@ struct SSEEdgeCaseTests {
         let response = try await makeSession(port: server.port).respond(to: "hi")
         #expect(response.content == "ok")
     }
+
+    @Test("CRLF final frame without a trailing newline strips the carriage return")
+    func crlfFinalFrameNoNewline() async throws {
+        let server = try CaptureServer(
+            body: #"data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}"# + "\r\n\r\n"
+                + #"data: [DONE]"# + "\r"
+        )
+        defer { server.stop() }
+
+        let response = try await makeSession(port: server.port).respond(to: "hi")
+        #expect(response.content == "ok")
+    }
 }

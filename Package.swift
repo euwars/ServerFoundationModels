@@ -51,15 +51,22 @@ let package = Package(
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
+        ]
         // Macro expansion tests (assertMacroExpansion) for the @Generable /
-        // @Guide / @SessionPropertyEntry implementations.
-        .testTarget(
-            name: "ServerFoundationModelsMacroTests",
-            dependencies: [
-                "ServerFoundationModelsMacros",
-                .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
-            ]
-        ),
+        // @Guide / @SessionPropertyEntry implementations. Their
+        // SwiftSyntaxMacrosTestSupport dependency needs XCTest, which the
+        // macOS Command Line Tools SDK lacks — opt out on CLT-only machines
+        // with SKIP_MACRO_TESTS=1 (CI always runs them).
+        if ProcessInfo.processInfo.environment["SKIP_MACRO_TESTS"] != "1" {
+            targets.append(.testTarget(
+                name: "ServerFoundationModelsMacroTests",
+                dependencies: [
+                    "ServerFoundationModelsMacros",
+                    .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+                ]
+            ))
+        }
+        targets.append(contentsOf: [
         // Subject: the same scenarios compiled against this package, running
         // against a local on-device open model (Ollama / any OpenAI-compatible server).
         .executableTarget(
@@ -95,7 +102,7 @@ let package = Package(
             ],
             swiftSettings: [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),
-        ]
+        ])
         // Apple's FoundationModels macros are only available under Xcode; skip this
         // target on macOS CLI builds so `swift test` can run ServerFoundationModels tests.
         let includeAppleParity = ProcessInfo.processInfo.environment["INCLUDE_APPLE_PARITY_TESTS"] == "1"

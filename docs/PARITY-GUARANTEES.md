@@ -5,8 +5,9 @@ behaves identically against ServerFoundationModels after changing one line —
 `import FoundationModels` → `import ServerFoundationModels`.**
 
 Five independent verification layers enforce it, each catching a class of
-divergence the others can't. All are machine-checkable; the first two run in
-CI on every push.
+divergence the others can't. All are machine-checkable; layers 1, 2, and 4
+run in CI on every push (layer 3's live suites self-gate when no model is
+reachable; the Apple-oracle half of layer 3 is self-hosted only).
 
 ## Layer 1 — Signature-level interface diff (compile-time surface)
 
@@ -41,8 +42,8 @@ settling into the exact final text.)
 
 The same scenario file runs against Apple's framework with the local
 on-device model and against ServerFoundationModels (same on-device model via the
-bridge, or any OpenAI-compatible endpoint via `PARITY_BACKEND`). 44
-scenarios × 2 = 88 assertions of model-agnostic contracts: structured
+bridge, or any OpenAI-compatible endpoint via `PARITY_BACKEND`). Dozens of
+scenarios × 2 libraries assert model-agnostic contracts: structured
 output, recursive schemas, guides, tool calling, session properties, dynamic
 profiles, history modifiers, errors, usage. Verified green against the
 on-device model and against vLLM/qwen3-moe over the network.
@@ -53,8 +54,8 @@ on-device model and against vLLM/qwen3-moe over the network.
 against the real framework, swaps the import, and runs their complete test
 suites against ServerFoundationModels:
 
-- `anthropics/ClaudeForFoundationModels` — 78/78
-- `apple/foundation-models-utilities` — 92/92 (its tests pinned down exact
+- `anthropics/ClaudeForFoundationModels` — full suite green at the pinned commit
+- `apple/foundation-models-utilities` — full suite green (its tests pinned down exact
   profile/history/skills semantics that documentation never states)
 
 ## Layer 5 — Issue-derived regressions
@@ -64,7 +65,10 @@ Failure modes reported against other FoundationModels reimplementations
 framework first — guaranteeing the suite asserts real framework behavior,
 not our assumptions.
 
-## Linux execution proof (2026-06-12)
+## Linux execution proof (2026-06-12, historical run log)
+
+*The endpoint, log paths, and counts below are from a one-off proof run on the
+author's network — not reproducible by readers without equivalent setup.*
 
 Run locally in the official `swift:6.2` container (aarch64-linux), with
 `10.0.0.200:8000` used purely as an HTTP inference endpoint
@@ -74,7 +78,7 @@ Run locally in the official `swift:6.2` container (aarch64-linux), with
   required and is now part of the library: corelibs lacks
   `URLSession.bytes`, so SSE streaming uses a data-delegate line stream)
 - model-free suites (API semantics + deterministic differential): green
-- full behavior suite over the network: **44/44**
+- full behavior suite over the network: all scenarios green
 - `.swiftinterface` emitted on Linux and diffed against Apple's: **0 gaps**
   (graphics-typed API — CGImage/CIImage/CVPixelBuffer — is allowlisted off
   Apple platforms, matching the fact that FoundationModels itself doesn't

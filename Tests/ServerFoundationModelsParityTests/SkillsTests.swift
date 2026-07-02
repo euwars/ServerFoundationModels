@@ -52,13 +52,65 @@ import Testing
         #expect(toggle.name == "activate_skill")
     }
 
-    @Test func unknownSkillThrows() async throws {
+    @Test func nonDeactivatableSkillStaysActiveOnSecondToggle() async throws {
+        let activations = SkillActivations()
+        let skills = Skills(activations: activations) {
+            Skill(name: "style", description: "style", instructions: "Be terse.", allowsDeactivation: false)
+        }
+        let toggle = try #require(AnyDynamicInstructions(skills).allInstructionTools.first)
+
+        _ = try await toggle.call(GeneratedContent(properties: ["skill": "style"]))
+        #expect(activations.contains("style"))
+        let second = try await toggle.call(GeneratedContent(properties: ["skill": "style"]))
+        #expect(activations.contains("style"))
+        #expect(second.text.contains("cannot be deactivated"))
+    }
+
+    @Test func unknownSkillReturnsExplanatoryOutput() async throws {
         let skills = Skills(activations: SkillActivations()) {
             Skill(name: "known", description: "known") { "hi" }
         }
         let toggle = try #require(AnyDynamicInstructions(skills).allInstructionTools.first)
-        await #expect(throws: UnknownSkillError.self) {
-            _ = try await toggle.call(GeneratedContent(properties: ["skill": "missing"]))
+        let out = try await toggle.call(GeneratedContent(properties: ["skill": "missing"]))
+        #expect(out.text.contains("missing"))
+        #expect(out.text.contains("known"))
+    }
+
+    @Test func concurrentActivationAndIterationDoesNotCrash() async {
+        let activations = SkillActivations()
+        let names = (0..<8).map { "skill-\($0)" }
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<16 {
+                group.addTask {
+                    for name in names {
+                        activations.activate(name)
+                        activations.deactivate(name)
+                    }
+                }
+            }
+            group.addTask {
+                for _ in 0..<64 {
+                    _ = Array(activations)
+                    _ = activations.snapshot()
+                }
+            }
+            await group.waitForAll()
         }
+    }
+
+    @Test func emptySkillsListProducesNoToggleTool() {
+        let skills = Skills(activations: SkillActivations(), skills: [])
+        #expect(AnyDynamicInstructions(skills).allInstructionTools.isEmpty)
+    }
+
+    @Test func renderedInstructionsHaveOneBlankLineBetweenSkills() {
+        let skills = Skills(activations: SkillActivations()) {
+            Skill(name: "alpha", description: "first") { "Alpha body." }
+            Skill(name: "beta", description: "second") { "Beta body." }
+        }
+        let rendered = AnyDynamicInstructions(skills).allInstructionTexts.joined(separator: "\n")
+        #expect(!rendered.contains("\n\n\n"))
+        #expect(rendered.contains("first\n\nSkill: beta"))
     }
 }

@@ -5,6 +5,9 @@
 import Foundation
 import Testing
 import ServerFoundationModels
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 // MARK: - Scripted fake model
 
@@ -28,9 +31,18 @@ struct ScriptError: Error, Equatable {
     var message: String
 }
 
+enum ScriptedResponseEvent: Sendable {
+    case addAttachment(Transcript.AttachmentSegment)
+    case removeAttachment(id: String)
+    case updateCustom(BehaviorCustomSegment)
+}
+
 /// One executor round the fake model plays back.
 struct ScriptedRound: Sendable {
     var textFragments: [String] = []
+    var reasoningFragments: [String] = []
+    var reasoningSignature: Data?
+    var responseEvents: [ScriptedResponseEvent] = []
     var toolCalls: [ScriptedToolCall] = []
     var usage: (input: Int, output: Int)?
     var failWith: ScriptError?
@@ -93,6 +105,22 @@ struct ScriptedModel: LanguageModel {
                 throw LanguageModelTransportError(statusCode: 0, message: "script exhausted")
             }
             if let gate = round.blockOn { await gate.wait() }
+            for fragment in round.reasoningFragments {
+                await channel.send(.reasoning(action: .appendText(fragment, tokenCount: 1)))
+            }
+            if let signature = round.reasoningSignature {
+                await channel.send(.reasoning(action: .updateSignature(signature, tokenCount: 1)))
+            }
+            for event in round.responseEvents {
+                switch event {
+                case .addAttachment(let segment):
+                    await channel.send(.response(action: .addAttachmentSegment(segment)))
+                case .removeAttachment(let id):
+                    await channel.send(.response(action: .removeAttachmentSegment(id: id)))
+                case .updateCustom(let segment):
+                    await channel.send(.response(action: .updateCustomSegment(segment)))
+                }
+            }
             for fragment in round.textFragments {
                 await channel.send(.response(action: .appendText(fragment, tokenCount: 1)))
             }
@@ -162,6 +190,47 @@ private func segmentText(_ segments: [Transcript.Segment]) -> String {
         if case .text(let text) = segment { return text.content }
         return nil
     }.joined()
+}
+
+struct BehaviorCustomSegment: Transcript.CustomSegment, Equatable {
+    struct Content: Codable, Equatable, Sendable {
+        var value: String
+    }
+
+    let id: String
+    var content: Content
+
+    init(id: String, value: String) {
+        self.id = id
+        self.content = Content(value: value)
+    }
+}
+
+private func behaviorTestAttachment(id: String) -> Transcript.AttachmentSegment {
+    #if canImport(CoreGraphics)
+    var pixel: UInt32 = 0xFF000000
+    let data = Data(bytes: &pixel, count: 4)
+    let provider = CGDataProvider(data: data as CFData)!
+    let image = CGImage(
+        width: 1,
+        height: 1,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+    )!
+    return Transcript.AttachmentSegment(id: id, content: .image(Transcript.ImageAttachment(image)))
+    #else
+    return Transcript.AttachmentSegment(
+        id: id,
+        content: .image(Transcript.ImageAttachment(data: Data([0x01])))
+    )
+    #endif
 }
 
 private func entryText(_ entry: Transcript.Entry) -> String {
@@ -368,9 +437,12 @@ struct SessionBehaviorTests {
         do {
             _ = try await session.respond(to: "loop forever")
             Issue.record("the runaway loop must throw")
-        } catch let error as LanguageModelTransportError {
-            #expect(error.statusCode == 0)
-            #expect(error.message.contains("64"))
+        } catch let error as LanguageModelSession.SessionControlError {
+            if case .toolLoopLimitReached(let limit) = error.reason {
+                #expect(limit == 64)
+            } else {
+                Issue.record("expected toolLoopLimitReached")
+            }
         }
         #expect(script.recordedRequests.count == 64)
         #expect(!session.isResponding)
@@ -507,6 +579,112 @@ struct SessionBehaviorTests {
     }
 
     // MARK: Session properties outside a binding
+
+    @Test("prompt transcript entry carries contextOptions from respond")
+    func promptTranscriptCarriesContextOptions() async throws {
+        let script = ScriptBox(rounds: [ScriptedRound(textFragments: ["ok"])])
+        let session = LanguageModelSession(model: ScriptedModel(script: script))
+        let contextOptions = ContextOptions(reasoningLevel: .deep)
+        _ = try await session.respond(to: "q", contextOptions: contextOptions)
+
+        let promptEntry = session.transcript.last { entry in
+            if case .prompt = entry { return true }
+            return false
+        }
+        guard case .prompt(let prompt) = promptEntry else {
+            Issue.record("expected a prompt transcript entry")
+            return
+        }
+        #expect(prompt.contextOptions.reasoningLevel == .deep)
+    }
+
+    @Test("unregistered tool call throws ToolCallError, not a transport error")
+    func unregisteredToolThrowsToolCallError() async throws {
+        let script = ScriptBox(rounds: [
+            ScriptedRound(toolCalls: [
+                ScriptedToolCall(id: "c1", name: "missingTool", argumentsJSON: "{}"),
+            ]),
+        ])
+        let session = LanguageModelSession(model: ScriptedModel(script: script))
+
+        do {
+            _ = try await session.respond(to: "go")
+            Issue.record("expected ToolCallError")
+        } catch let error as LanguageModelSession.ToolCallError {
+            #expect(error.tool.name == "missingTool")
+            #expect(!(error.underlyingError is LanguageModelTransportError))
+        }
+    }
+
+    @Test("reasoning signature from updateSignature lands in the transcript")
+    func reasoningSignatureLandsInTranscript() async throws {
+        let signature = Data([0x01, 0x02, 0x03])
+        let script = ScriptBox(rounds: [
+            ScriptedRound(
+                reasoningFragments: ["thinking"],
+                reasoningSignature: signature,
+                textFragments: ["answer"]
+            ),
+        ])
+        let session = LanguageModelSession(model: ScriptedModel(script: script))
+        _ = try await session.respond(to: "q")
+
+        let reasoningEntry = session.transcript.first { entry in
+            if case .reasoning = entry { return true }
+            return false
+        }
+        guard let reasoningEntry, case .reasoning(let reasoning) = reasoningEntry else {
+            Issue.record("expected a reasoning transcript entry")
+            return
+        }
+        #expect(reasoning.signature == signature)
+        #expect(entryText(reasoningEntry) == "thinking")
+    }
+
+    @Test("custom segment index stays valid after attachment removal")
+    func customSegmentSurvivesAttachmentRemoval() async throws {
+        let script = ScriptBox(rounds: [
+            ScriptedRound(
+                responseEvents: [
+                    .addAttachment(behaviorTestAttachment(id: "A")),
+                    .updateCustom(BehaviorCustomSegment(id: "C", value: "initial")),
+                    .removeAttachment(id: "A"),
+                    .updateCustom(BehaviorCustomSegment(id: "C", value: "updated")),
+                ],
+                textFragments: ["done"]
+            ),
+        ])
+        let session = LanguageModelSession(model: ScriptedModel(script: script))
+        _ = try await session.respond(to: "q")
+
+        let responseEntry = session.transcript.last { entry in
+            if case .response = entry { return true }
+            return false
+        }
+        guard case .response(let response) = responseEntry else {
+            Issue.record("expected a response transcript entry")
+            return
+        }
+
+        let customSegments = response.segments.compactMap { segment -> BehaviorCustomSegment? in
+            guard case .custom(let custom) = segment else { return nil }
+            return custom as? BehaviorCustomSegment
+        }
+        #expect(customSegments.count == 1)
+        #expect(customSegments[0].content.value == "updated")
+        #expect(!response.segments.contains { segment in
+            if case .attachment = segment { return true }
+            return false
+        })
+    }
+
+    @Test("single-line fenced JSON decodes on typed respond")
+    func singleLineFenceDecodesOnTypedRespond() async throws {
+        let script = ScriptBox(rounds: [ScriptedRound(textFragments: ["```42```"])])
+        let session = LanguageModelSession(model: ScriptedModel(script: script))
+        let response = try await session.respond(to: "q", generating: Int.self)
+        #expect(response.content == 42)
+    }
 
     @Test("a @SessionProperty write outside any session binding is dropped, not leaked")
     func orphanSessionPropertyWriteDoesNotLeak() async throws {

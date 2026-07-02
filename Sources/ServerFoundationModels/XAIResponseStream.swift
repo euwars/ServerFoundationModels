@@ -31,7 +31,7 @@ enum XAIResponseStream {
                 return finalizePending()
             }
 
-            let event = try JSONNode.parse(trimmed)
+            guard let event = try? JSONNode.parse(trimmed) else { return [] }
             guard case .string(let type) = event["type"] else { return [] }
 
             switch type {
@@ -39,7 +39,10 @@ enum XAIResponseStream {
                 let message = XAIServerToolWire.stringValue(event["message"])
                     ?? XAIServerToolWire.stringValue(event["error"]?["message"])
                     ?? "xAI stream error"
-                throw LanguageModelTransportError(statusCode: 0, message: message)
+                throw XAIErrorMapper.mapTransport(
+                    statusCode: XAIErrorMapper.streamStatusCode(from: event),
+                    body: message
+                )
 
             case "response.created", "response.in_progress":
                 if let id = XAIServerToolWire.stringValue(event["response"]?["id"]) {
@@ -103,7 +106,10 @@ enum XAIResponseStream {
                 isTerminal = true
                 let message = XAIServerToolWire.stringValue(event["response"]?["error"]?["message"])
                     ?? type
-                throw LanguageModelTransportError(statusCode: 0, message: message)
+                throw XAIErrorMapper.mapTransport(
+                    statusCode: XAIErrorMapper.streamStatusCode(from: event),
+                    body: message
+                )
 
             default:
                 return []
@@ -215,11 +221,13 @@ enum XAIResponseStream {
             var collected: [(id: String, name: String, arguments: String)] = []
             for item in outputItems {
                 guard case .string(let type) = item["type"], type == "function_call" else { continue }
-                let id = XAIServerToolWire.stringValue(item["id"])
-                    ?? XAIServerToolWire.stringValue(item["call_id"])
+                let id = XAIServerToolWire.stringValue(item["call_id"])
+                    ?? XAIServerToolWire.stringValue(item["id"])
                     ?? UUID().uuidString
                 guard let name = XAIServerToolWire.stringValue(item["name"]), !name.isEmpty else { continue }
+                let itemID = XAIServerToolWire.stringValue(item["id"])
                 let arguments = XAIServerToolWire.stringValue(item["arguments"])
+                    ?? itemID.flatMap { functionCallArgs[$0]?.arguments }
                     ?? functionCallArgs[id]?.arguments
                     ?? "{}"
                 collected.append((id: id, name: name, arguments: arguments))

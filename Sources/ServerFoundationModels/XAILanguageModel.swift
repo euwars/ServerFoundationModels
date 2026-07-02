@@ -55,12 +55,16 @@ public struct XAILanguageModel: Sendable, LanguageModel {
     // MARK: Executor
 
     public struct Executor: LanguageModelExecutor {
-        public struct Configuration: Hashable, Sendable {
+        public struct Configuration: Hashable, Sendable, CustomStringConvertible {
             var model: XAIModel
             var auth: XAIAuthMode
             var serverTools: Set<XAIServerTool>
             var baseURL: URL
             var timeout: TimeInterval
+
+            public var description: String {
+                "Configuration(model: \(model), auth: \(auth), serverTools: \(serverTools), baseURL: \(baseURL), timeout: \(timeout))"
+            }
         }
 
         let configuration: Configuration
@@ -159,14 +163,21 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             var streamingBody = body
             streamingBody.stream = true
             urlRequest.httpBody = try streamingBody.bodyJSON()
+            validateAuth(auth)
+            warnIfInsecureHTTP(baseURL: baseURL, auth: auth, logger: logger)
 
             let (lines, response) = try await HTTPLineStream.connect(urlRequest)
             let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
 
             if response.statusCode >= 400 || contentType.contains("application/json") {
                 var bodyLines: [String] = []
+                var bodySize = 0
                 for try await line in lines {
                     bodyLines.append(line)
+                    if response.statusCode >= 400 {
+                        bodySize += line.utf8.count
+                        if bodySize > 4096 { break }
+                    }
                 }
                 let responseBody = bodyLines.joined(separator: "\n")
                 if response.statusCode >= 400 {
@@ -174,7 +185,8 @@ public struct XAILanguageModel: Sendable, LanguageModel {
                         "status": .stringConvertible(response.statusCode),
                         "body": .string(String(responseBody.prefix(256))),
                     ])
-                    throw XAIError(status: response.statusCode, body: responseBody)
+                    let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+                    throw XAIError(status: response.statusCode, body: responseBody, retryAfter: retryAfter)
                 }
                 // Server honored the request but replied with a single non-streamed
                 // JSON document; parse the whole body rather than truncating it.
@@ -234,6 +246,41 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             }
         }
 
+        private func validateAuth(_ auth: XAIAuthMode) {
+            switch auth {
+            case .apiKey(let key):
+                precondition(
+                    !key.contains("\n") && !key.contains("\r"),
+                    "API key must not contain newline characters"
+                )
+            case .proxied(let headers):
+                for (name, value) in headers {
+                    precondition(
+                        !value.contains("\n") && !value.contains("\r"),
+                        "header \(name) value must not contain newline characters"
+                    )
+                }
+            }
+        }
+
+        private func warnIfInsecureHTTP(baseURL: URL, auth: XAIAuthMode, logger: Logger) {
+            guard baseURL.scheme?.lowercased() == "http", authCarriesCredentials(auth) else { return }
+            XAIHTTPWarnings.lock.lock()
+            let shouldWarn = !XAIHTTPWarnings.didWarnInsecureHTTP
+            if shouldWarn { XAIHTTPWarnings.didWarnInsecureHTTP = true }
+            XAIHTTPWarnings.lock.unlock()
+            if shouldWarn {
+                logger.warning("xAI base URL uses plain HTTP while auth carries credentials")
+            }
+        }
+
+        private func authCarriesCredentials(_ auth: XAIAuthMode) -> Bool {
+            switch auth {
+            case .apiKey: return true
+            case .proxied(let headers): return !headers.isEmpty
+            }
+        }
+
         private func updateStateBeforeRequest(
             transcript: Transcript,
             state: XAIConversationState
@@ -256,4 +303,9 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             }
         }
     }
+}
+
+private enum XAIHTTPWarnings {
+    static let lock = NSLock()
+    static var didWarnInsecureHTTP = false
 }

@@ -65,43 +65,44 @@ public struct Skills: DynamicInstructions {
 
     public var body: some DynamicInstructions {
         DynamicInstructions.ForEach(Array(skills.enumerated()), id: \.element.name) { item in
-            if item.offset > 0 {
-                Instructions { "\n\n" }
-            }
+            let prefix = item.offset > 0 ? "\n" : ""
             let skill = item.element
             if case .instructions(let stored) = skill.storage {
                 if activations.contains(skill.name) {
-                    Instructions { "Skill: \(skill.name) [active]\n" }
+                    Instructions { "\(prefix)Skill: \(skill.name) [active]\n" }
                     stored.instructions
                 } else {
-                    Instructions { "Skill: \(skill.name) [inactive]\nDescription: \(skill.description)" }
+                    Instructions { "\(prefix)Skill: \(skill.name) [inactive]\nDescription: \(skill.description)" }
                 }
             } else {
-                Instructions { "Skill: \(skill.name) [on demand]\nDescription: \(skill.description)" }
+                Instructions { "\(prefix)Skill: \(skill.name) [on demand]\nDescription: \(skill.description)" }
             }
         }
 
-        ToggleSkillTool(
-            name: toolName,
-            description: toolDescription,
-            skills: skills,
-            activations: activations,
-            strictSchema: strictSchema,
-            onCall: { [activations] skill in
-                switch skill.storage {
-                case .prompt:
-                    skill.activate()
-                case .instructions:
-                    if activations.contains(skill.name) {
-                        activations.deactivate(skill.name)
-                        skill.deactivate()
-                    } else {
-                        activations.activate(skill.name)
+        if !skills.isEmpty {
+            ToggleSkillTool(
+                name: toolName,
+                description: toolDescription,
+                skills: skills,
+                activations: activations,
+                strictSchema: strictSchema,
+                onCall: { [activations] skill in
+                    switch skill.storage {
+                    case .prompt:
                         skill.activate()
+                    case .instructions(let stored):
+                        if activations.contains(skill.name) {
+                            guard stored.allowsDeactivation else { return }
+                            activations.deactivate(skill.name)
+                            skill.deactivate()
+                        } else {
+                            activations.activate(skill.name)
+                            skill.activate()
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
     }
 }
 
@@ -136,7 +137,8 @@ private struct ToggleSkillTool: @unchecked Sendable, Tool {
             return nil
         }.contains(where: \.allowsDeactivation)
 
-        let activeNames = Set(activations)
+        let ownSkillNames = Set(skills.map(\.name))
+        let activeNames = Set(activations).intersection(ownSkillNames)
         var allowed = skills.map(\.name).filter { !activeNames.contains($0) }
         if !strictSchema || allowsDeactivation {
             allowed += activeNames
@@ -157,18 +159,30 @@ private struct ToggleSkillTool: @unchecked Sendable, Tool {
             : "Activates a skill." + (onDemandExplanation.map { " \($0)" } ?? "")
 
         // A one-property object whose `skill` field is an enum of the allowed names.
-        let parameters = try! GenerationSchema(
-            root: DynamicGenerationSchema(
+        let skillPropertySchema = allowed.isEmpty
+            ? DynamicGenerationSchema(type: String.self)
+            : DynamicGenerationSchema(name: "skill", anyOf: allowed)
+        let argumentsRoot = DynamicGenerationSchema(
+            name: "Arguments",
+            properties: [
+                DynamicGenerationSchema.Property(name: "skill", schema: skillPropertySchema)
+            ]
+        )
+        let parameters: GenerationSchema
+        if let schema = try? GenerationSchema(root: argumentsRoot, dependencies: []) {
+            parameters = schema
+        } else {
+            let fallbackRoot = DynamicGenerationSchema(
                 name: "Arguments",
                 properties: [
                     DynamicGenerationSchema.Property(
                         name: "skill",
-                        schema: DynamicGenerationSchema(name: "skill", anyOf: allowed)
+                        schema: DynamicGenerationSchema(type: String.self)
                     )
                 ]
-            ),
-            dependencies: []
-        )
+            )
+            parameters = GenerationSchema(node: fallbackRoot.node)
+        }
 
         self.name = resolvedName
         self.description = description ?? defaultDescription
@@ -181,16 +195,24 @@ private struct ToggleSkillTool: @unchecked Sendable, Tool {
     func call(arguments: GeneratedContent) async throws -> Prompt {
         let requested = try arguments.value(String.self, forProperty: "skill")
         guard let skill = skills.first(where: { $0.name == requested }) else {
-            throw UnknownSkillError(requested: requested, available: skills.map(\.name))
+            let error = UnknownSkillError(requested: requested, available: skills.map(\.name))
+            return Prompt { error.description }
         }
-        defer { onCall(skill) }
         switch skill.storage {
         case .prompt(let promptSkill):
+            onCall(skill)
             return promptSkill.prompt
-        case .instructions:
-            let activated = activations.contains(skill.name)
-            let verb = activated ? "deactivated" : "activated"
-            return Prompt { "Successfully \(verb) skill: \(skill.name)" }
+        case .instructions(let stored):
+            if activations.contains(skill.name) {
+                if !stored.allowsDeactivation {
+                    return Prompt { "Skill '\(skill.name)' is already active and cannot be deactivated." }
+                }
+                onCall(skill)
+                return Prompt { "Successfully deactivated skill: \(skill.name)" }
+            } else {
+                onCall(skill)
+                return Prompt { "Successfully activated skill: \(skill.name)" }
+            }
         }
     }
 }

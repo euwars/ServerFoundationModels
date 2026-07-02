@@ -31,6 +31,8 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         /// literals, and interpolation).
         var guideDescriptionSource: String?
         var guideExpressions: [String]
+        /// Source for a memberwise-init default (`5`, `nil`, …), if any.
+        var defaultValue: String?
 
         /// The streaming-partial counterpart of the base type, with array
         /// sugar translated structurally ([X] -> [X.PartiallyGenerated]) to
@@ -38,9 +40,16 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         var partialType: String {
             func translate(_ type: String) -> String {
                 let trimmed = type.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                if trimmed.hasPrefix("Dictionary<"), trimmed.hasSuffix(">") {
+                    // Dictionaries are not generable; leave the type untranslated.
+                    return trimmed
+                }
+                if trimmed.hasPrefix("["), trimmed.contains(":"), trimmed.hasSuffix("]") {
+                    // Dictionary sugar [K: V] — not generable; leave untranslated.
+                    return trimmed
+                }
+                if trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
                     let inner = String(trimmed.dropFirst().dropLast())
-                    // Dictionary sugar is not generable; only arrays appear here.
                     return "[\(translate(inner))]"
                 }
                 return "\(trimmed).PartiallyGenerated"
@@ -85,7 +94,17 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
         if let enumDeclaration = declaration.as(EnumDeclSyntax.self) {
-            return try enumExpansion(of: node, enum: enumDeclaration)
+            return enumExpansion(of: node, enum: enumDeclaration, in: context)
+        }
+        if declaration.is(ClassDeclSyntax.self) || declaration.is(ActorDeclSyntax.self) {
+            context.diagnose(Diagnostic(
+                node: Syntax(declaration),
+                message: GenerableDiagnostic(
+                    "@Generable currently supports structs and enums",
+                    id: "unsupportedDeclKind"
+                )
+            ))
+            return []
         }
         guard declaration.is(StructDeclSyntax.self) else {
             throw MacroError(description: "@Generable currently supports structs and enums")
@@ -103,7 +122,15 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         // Memberwise initializer.
         if !properties.isEmpty {
             let parameters = properties
-                .map { "\($0.name): \($0.type)" }
+                .map { property -> String in
+                    if let defaultValue = property.defaultValue {
+                        return "\(property.name): \(property.type) = \(defaultValue)"
+                    }
+                    if property.isOptional {
+                        return "\(property.name): \(property.type) = nil"
+                    }
+                    return "\(property.name): \(property.type)"
+                }
                 .joined(separator: ", ")
             let assignments = properties
                 .map { "        self.\($0.name) = \($0.name)" }
@@ -211,9 +238,30 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
     /// by its String raw value when present, else its case name.
     private static func enumExpansion(
         of node: AttributeSyntax,
-        enum declaration: EnumDeclSyntax
-    ) throws -> [DeclSyntax] {
+        enum declaration: EnumDeclSyntax,
+        in context: some MacroExpansionContext
+    ) -> [DeclSyntax] {
         let access = accessModifier(in: declaration.modifiers)
+
+        // A raw-value type is always the first entry in the inheritance
+        // clause; later entries are protocols and never raw-value types.
+        let nonStringRawValueTypes: Set<String> = [
+            "Int", "Int8", "Int16", "Int32", "Int64",
+            "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
+            "Double", "Float", "Character",
+        ]
+        if let first = declaration.inheritanceClause?.inheritedTypes.first,
+            nonStringRawValueTypes.contains(first.type.trimmedDescription)
+        {
+            context.diagnose(Diagnostic(
+                node: Syntax(declaration.name),
+                message: GenerableDiagnostic(
+                    "@Generable uses enum case names on the wire; non-String raw values are ignored",
+                    id: "nonStringEnumRawValue",
+                    severity: .warning
+                )
+            ))
+        }
 
         var caseNames: [String] = []
         // Swift expression source for each case's wire value: the original
@@ -224,7 +272,14 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             guard let enumCase = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
             for element in enumCase.elements {
                 guard element.parameterClause == nil else {
-                    throw MacroError(description: "@Generable enums with associated values are not supported yet")
+                    context.diagnose(Diagnostic(
+                        node: Syntax(element),
+                        message: GenerableDiagnostic(
+                            "@Generable enums with associated values are not supported yet",
+                            id: "enumAssociatedValues"
+                        )
+                    ))
+                    continue
                 }
                 let name = element.name.text
                 caseNames.append(name)
@@ -236,7 +291,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             }
         }
         guard !caseNames.isEmpty else {
-            throw MacroError(description: "@Generable enums must declare at least one case")
+            return []
         }
 
         let typeDescription = descriptionArgumentSource(in: node)
@@ -302,9 +357,50 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             guard let variable = member.decl.as(VariableDeclSyntax.self) else { continue }
             guard !variable.modifiers.contains(where: { $0.name.text == "static" }) else { continue }
 
+            if variable.modifiers.contains(where: { $0.name.text == "lazy" }) {
+                context.diagnose(Diagnostic(
+                    node: Syntax(variable),
+                    message: GenerableDiagnostic(
+                        "@Generable does not support lazy stored properties",
+                        id: "lazyStoredProperty"
+                    )
+                ))
+                continue
+            }
+            if variable.modifiers.contains(where: { $0.name.text == "weak" }) {
+                context.diagnose(Diagnostic(
+                    node: Syntax(variable),
+                    message: GenerableDiagnostic(
+                        "@Generable does not support weak stored properties",
+                        id: "weakStoredProperty"
+                    )
+                ))
+                continue
+            }
+            if variable.modifiers.contains(where: { $0.name.text == "unowned" }) {
+                context.diagnose(Diagnostic(
+                    node: Syntax(variable),
+                    message: GenerableDiagnostic(
+                        "@Generable does not support unowned stored properties",
+                        id: "unownedStoredProperty"
+                    )
+                ))
+                continue
+            }
+
             var guideDescriptionSource: String?
             var guideExpressions: [String] = []
-            if let guide = attribute(named: "Guide", on: variable),
+            let guideAttributes = attributes(named: "Guide", on: variable)
+            for duplicate in guideAttributes.dropFirst() {
+                context.diagnose(Diagnostic(
+                    node: Syntax(duplicate),
+                    message: GenerableDiagnostic(
+                        "@Generable supports only one @Guide attribute per property",
+                        id: "duplicateGuide"
+                    )
+                ))
+            }
+            if let guide = guideAttributes.first,
                 let arguments = guide.arguments?.as(LabeledExprListSyntax.self) {
                 for argument in arguments {
                     if argument.label?.text == "description" {
@@ -346,7 +442,18 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                     !isStoredAccessorBlock(accessorBlock) {
                     continue
                 }
-                guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+                guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else {
+                    if binding.pattern.is(TuplePatternSyntax.self) {
+                        context.diagnose(Diagnostic(
+                            node: Syntax(binding.pattern),
+                            message: GenerableDiagnostic(
+                                "@Generable does not support tuple-pattern properties",
+                                id: "tuplePatternProperty"
+                            )
+                        ))
+                    }
+                    continue
+                }
 
                 // `let x = ...` is a constant: it cannot be assigned in the
                 // generated initializers, so it does not participate.
@@ -365,17 +472,30 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                     continue
                 }
 
+                if resolvedType.is(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
+                    context.diagnose(Diagnostic(
+                        node: Syntax(resolvedType),
+                        message: GenerableDiagnostic(
+                            "@Generable does not support implicitly unwrapped optional properties",
+                            id: "implicitlyUnwrappedOptional"
+                        )
+                    ))
+                    continue
+                }
+
                 let type = resolvedType.trimmedDescription
                 let isOptional = resolvedType.is(OptionalTypeSyntax.self)
                     || (type.hasPrefix("Optional<") && type.hasSuffix(">"))
                 let name = pattern.identifier.text
+                let defaultValue = binding.initializer?.value.trimmedDescription
                 properties.append(StoredProperty(
                     name: name,
                     wireName: stripBackticks(name),
                     type: type,
                     isOptional: isOptional,
                     guideDescriptionSource: guideDescriptionSource,
-                    guideExpressions: guideExpressions
+                    guideExpressions: guideExpressions,
+                    defaultValue: defaultValue
                 ))
             }
         }
@@ -396,7 +516,8 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         }
     }
 
-    private static func attribute(named name: String, on variable: VariableDeclSyntax) -> AttributeSyntax? {
+    private static func attributes(named name: String, on variable: VariableDeclSyntax) -> [AttributeSyntax] {
+        var matches: [AttributeSyntax] = []
         for attribute in variable.attributes {
             guard let attribute = attribute.as(AttributeSyntax.self) else { continue }
             // Compare the terminal name so module-qualified attributes
@@ -409,9 +530,9 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             } else {
                 terminalName = nil
             }
-            if terminalName == name { return attribute }
+            if terminalName == name { matches.append(attribute) }
         }
-        return nil
+        return matches
     }
 
     /// The original `description:` argument expression source, spliced

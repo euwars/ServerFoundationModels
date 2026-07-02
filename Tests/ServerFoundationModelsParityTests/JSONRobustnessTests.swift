@@ -192,6 +192,55 @@ struct JSONRobustnessTests {
         #expect(JSONNode.number(2.5).serialized == "2.5")
     }
 
+    // MARK: - Lenient partial parsing
+
+    @Test("partial string repair keeps trailing e/t/f/n/u characters")
+    func partialStringKeepsTrailingLetters() throws {
+        let partial = try #require(GeneratedContent.partial(json: #"{"name": "Kate"#))
+        #expect(try partial.value(String.self, forProperty: "name") == "Kate")
+    }
+
+    @Test("partial string ending in backslash escape does not crash")
+    func partialStringTrailingBackslash() {
+        _ = GeneratedContent.partial(json: #"{"name": "Kate\"#)
+    }
+
+    @Test("partial true keyword is dropped")
+    func partialTrueKeywordDropped() {
+        #expect(GeneratedContent.partial(json: #"{"flag": tru"#) == nil)
+    }
+
+    @Test("trailing colon still repairs")
+    func trailingColonStillRepairs() throws {
+        if let partial = GeneratedContent.partial(json: #"{"a": 1, "b":"#) {
+            #expect(try partial.value(Int.self, forProperty: "a") == 1)
+        }
+    }
+
+    @Test("GeneratedContent(kind:id:) round-trips id for scalar kind")
+    func kindInitRoundTripsScalarID() {
+        let id = GenerationID()
+        let content = GeneratedContent(kind: .string("hi"), id: id)
+        #expect(content.id == id)
+    }
+
+    @Test("GeneratedContent(kind:id:) round-trips id for array kind")
+    func kindInitRoundTripsArrayID() {
+        let id = GenerationID()
+        let content = GeneratedContent(kind: .array([GeneratedContent(kind: .null)]), id: id)
+        #expect(content.id == id)
+    }
+
+    @Test("GeneratedContent(kind:id:) round-trips id for structure kind")
+    func kindInitRoundTripsStructureID() {
+        let id = GenerationID()
+        let content = GeneratedContent(
+            kind: .structure(properties: ["x": GeneratedContent(kind: .bool(true))], orderedKeys: ["x"]),
+            id: id
+        )
+        #expect(content.id == id)
+    }
+
     // MARK: - Round trip sanity
 
     @Test("normal object round-trips through serialize/parse")

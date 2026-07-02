@@ -25,7 +25,7 @@ enum XAIRequestBuilder {
             default: model.defaultReasoningEffort
         )
         let temperature = request.generationOptions.temperature
-        let maxTokens = request.generationOptions.maximumResponseTokens ?? 65_536
+        let maxTokens = request.generationOptions.maximumResponseTokens
         let tools = makeTools(
             clientTools: request.enabledToolDefinitions,
             serverTools: serverTools

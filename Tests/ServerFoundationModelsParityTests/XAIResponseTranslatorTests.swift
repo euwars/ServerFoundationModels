@@ -95,4 +95,24 @@ import Testing
         }
         #expect(text == "Here is the summary.")
     }
+
+    @Test func prefersCallIdOverItemId() throws {
+        let json = """
+        {
+          "id": "resp_fc",
+          "output": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_1",
+              "name": "fetchWeather",
+              "arguments": "{}"
+            }
+          ]
+        }
+        """
+        let parsed = try XAIResponseTranslator.parse(body: Data(json.utf8))
+        #expect(parsed.toolCalls.count == 1)
+        #expect(parsed.toolCalls[0].id == "call_1")
+    }
 }

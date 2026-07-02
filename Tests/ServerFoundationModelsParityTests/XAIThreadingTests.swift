@@ -59,4 +59,20 @@ import Testing
         #expect(XAIError.isThreadingContentElementError(error))
         #expect(!XAIError.isThreadingContentElementError(XAIError(status: 400, body: "other")))
     }
+
+    @Test func mapsRetryAfterHeaderToResetDate() {
+        let before = Date()
+        let mapped = XAIErrorMapper.map(XAIError(status: 429, body: "too many", retryAfter: "60"))
+        guard case .rateLimited(let payload) = mapped as? LanguageModelError else {
+            Issue.record("expected LanguageModelError.rateLimited")
+            return
+        }
+        guard let resetDate = payload.resetDate else {
+            Issue.record("expected non-nil resetDate")
+            return
+        }
+        let interval = resetDate.timeIntervalSince(before)
+        #expect(interval >= 59)
+        #expect(interval <= 62)
+    }
 }

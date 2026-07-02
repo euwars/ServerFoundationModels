@@ -2,7 +2,7 @@ import Foundation
 import ServerFoundationModels
 import Testing
 
-@Suite struct XAILiveServerToolsValidationTests {
+@Suite struct XAIServerToolsValidationTests {
     @Test func strictPassRequiresEachSegmentKind() {
         #expect(XAIServerToolSegmentInventory(
             webSearchCount: 1, xSearchCount: 1, webFetchCount: 1, citationCount: 1, hasResponseText: true

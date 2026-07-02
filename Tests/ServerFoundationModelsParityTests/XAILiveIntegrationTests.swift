@@ -71,16 +71,16 @@ struct XAILiveIntegrationTests {
             name: .grok4_3,
             auth: .apiKey(key),
             conversationState: state,
-            serverTools: XAILiveServerToolsScenario.serverTools,
-            timeout: XAILiveServerToolsScenario.timeout
+            serverTools: XAIServerToolsValidationScenario.serverTools,
+            timeout: XAIServerToolsValidationScenario.timeout
         )
         let session = LanguageModelSession(
             model: model,
-            instructions: XAILiveServerToolsScenario.instructions
+            instructions: XAIServerToolsValidationScenario.instructions
         )
 
         var lastText = ""
-        for prompt in XAILiveServerToolsScenario.prompts {
+        for prompt in XAIServerToolsValidationScenario.prompts {
             let response = try await session.respond(to: prompt)
             lastText = response.content
         }

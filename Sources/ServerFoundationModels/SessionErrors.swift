@@ -100,6 +100,30 @@ extension LanguageModelSession {
         }
     }
 
+    /// Internal session control-flow failures (tool-loop limits, invalid
+    /// post-transform transcripts). Distinct from transport and tool errors.
+    public struct SessionControlError: Swift.Error, CustomDebugStringConvertible {
+        public enum Reason: Sendable {
+            case toolLoopLimitReached(limit: Int)
+            case invalidTranscript(description: String)
+        }
+
+        public var reason: Reason
+
+        public init(reason: Reason) {
+            self.reason = reason
+        }
+
+        public var debugDescription: String {
+            switch reason {
+            case .toolLoopLimitReached(let limit):
+                return "the tool-call loop exceeded \(limit) rounds without producing a final response"
+            case .invalidTranscript(let description):
+                return description
+            }
+        }
+    }
+
     /// Service-level failures surfaced by server-backed models.
     public enum Error: LocalizedError, CustomDebugStringConvertible, Hashable {
         case networkFailure(PrivateCloudComputeLanguageModel.Error.NetworkFailure)

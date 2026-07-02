@@ -66,4 +66,20 @@ import Testing
         #expect(wire.contains("\"store\":true"))
         #expect(wire.contains("\"prompt_cache_key\":\"convo-uuid\""))
     }
+
+    @Test func omitsMaxOutputTokensWhenUnset() throws {
+        let request = LanguageModelExecutorGenerationRequest(
+            transcript: Transcript(entries: [
+                .prompt(.init(segments: [.text(.init(content: "hi"))]))
+            ])
+        )
+        let built = try XAIRequestBuilder.build(
+            from: request,
+            model: .grok4_3,
+            serverTools: [],
+            conversationState: XAIConversationState()
+        )
+        let wire = built.request.serialize()
+        #expect(!wire.contains("max_output_tokens"))
+    }
 }

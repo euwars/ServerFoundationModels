@@ -1,11 +1,15 @@
 # apple/foundation-models-utilities compatibility
 
+*Historical run log (2026-06-12): private endpoint `10.0.0.200:8000`, host log
+`~/vllm-tools.log`, and local checkout `/tmp/fmu-lf` are from the author's
+one-off proof — not reproducible by readers without equivalent setup.*
+
 Proof run, 2026-06-12: the upstream package builds against ServerFoundationModels
 with `import FoundationModels` → `import ServerFoundationModels` (plus the new
 `FoundationModels::` module-selector spellings), and its complete test
 suite — Skills, history modifiers (rolling window, summarize, drop completed
-tool calls), chat-completions request/SSE/error/usage handling — passes:
-**92/92**.
+tool calls), chat-completions request/SSE/error/usage handling — passes in full
+at the pinned upstream commit.
 
 Live integration: its `ChatCompletionsLanguageModel`, driven by
 ServerFoundationModels's `LanguageModelSession`, against vLLM (`qwen3-moe`,
@@ -19,9 +23,9 @@ FMU_TEST_ENDPOINT=http://10.0.0.200:8000/v1 FMU_TEST_MODEL=qwen3-moe \
 
 The ServerFoundationModels parity suite also runs against that endpoint
 (`PARITY_BACKEND=chat-completions PARITY_BASE_URL=http://10.0.0.200:8000
-PARITY_MODEL=qwen3-moe`): **41/41** after enabling the server's tool parser
-(vllm 0.22.1, restarted with `--enable-auto-tool-choice --tool-call-parser
-hermes`; full command in ~/vllm-tools.log's header on the host). Every
+PARITY_MODEL=qwen3-moe`): all scenarios green after enabling the server's tool
+parser (vllm 0.22.1, restarted with `--enable-auto-tool-choice --tool-call-parser
+hermes`; full command recorded in `~/vllm-tools.log` on the proof host). Every
 behavior scenario — tool loop, structured output, recursive schemas, typed
 streaming, session properties, dynamic profiles — holds against a remote
 open model, not just Apple's on-device one.

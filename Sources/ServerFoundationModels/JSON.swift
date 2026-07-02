@@ -352,10 +352,26 @@ extension JSONNode {
         var repaired = String(text.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !repaired.isEmpty else { return nil }
 
+        var endsInOpenString = false
+        var scanInString = false
+        var scanEscaped = false
+        for character in repaired {
+            if scanEscaped { scanEscaped = false; continue }
+            if scanInString {
+                if character == "\\" { scanEscaped = true }
+                else if character == "\"" { scanInString = false }
+                continue
+            }
+            if character == "\"" { scanInString = true }
+        }
+        endsInOpenString = scanInString
+
         // Drop a trailing partial token that cannot be completed (e.g. `tru`,
-        // `-1.2e`, or a dangling comma/colon), conservatively.
-        while let last = repaired.last, "+-.eEtfnu".contains(last) || last == "," || last == ":" {
-            repaired.removeLast()
+        // `-1.2e`, or a dangling comma/colon), but only outside string literals.
+        if !endsInOpenString {
+            while let last = repaired.last, "+-.eEtfnu".contains(last) || last == "," || last == ":" {
+                repaired.removeLast()
+            }
         }
 
         var closers: [Character] = []
@@ -377,19 +393,11 @@ extension JSONNode {
             }
         }
         if inString { repaired.append("\"") }
-        // A key without a value cannot be closed into a valid object.
         while let last = repaired.last, last == "," || last == ":" {
             repaired.removeLast()
         }
-        if let lastColon = repaired.last, lastColon == ":" { repaired.removeLast() }
         repaired.append(contentsOf: closers.reversed())
 
-        if let node = try? parse(repaired) { return node }
-
-        // Final fallback: also drop a trailing dangling key string.
-        if repaired.hasSuffix("\"}") || repaired.hasSuffix("\"]") {
-            return nil
-        }
-        return nil
+        return try? parse(repaired)
     }
 }

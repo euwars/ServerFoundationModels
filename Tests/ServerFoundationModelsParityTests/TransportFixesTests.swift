@@ -337,6 +337,30 @@ struct TransportFixesTests {
         #expect(response.content == "ok")
     }
 
+    // MARK: Streaming idle timeout
+
+    @Test("streaming idle timeout when the server stalls after the first chunk")
+    func streamingIdleTimeoutOnStall() async throws {
+        let server = try StallMidStreamServer()
+        defer { server.stop() }
+
+        let model = ChatCompletionsLanguageModel(
+            name: "wire-model",
+            url: URL(string: "http://127.0.0.1:\(server.port)")!,
+            timeout: 1
+        )
+        let started = Date()
+        do {
+            _ = try await LanguageModelSession(model: model).respond(to: "hi")
+            Issue.record("expected a timeout error")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+            #expect(Date().timeIntervalSince(started) < 5, "must not hang waiting for stalled bytes")
+        } catch {
+            Issue.record("expected URLError.timedOut, got \(error)")
+        }
+    }
+
     // MARK: LF_DEBUG redaction
 
     @Test("LF_DEBUG dumps the request body with content redacted")
@@ -372,6 +396,102 @@ struct TransportFixesTests {
         // Structure stays visible.
         #expect(captured.contains(#""role":"user""#))
         #expect(captured.contains(#""model":"wire-model""#))
+    }
+}
+
+// MARK: - Loopback server that stalls mid-stream
+
+/// Sends response headers and one SSE chunk, then blocks without closing.
+final class StallMidStreamServer: @unchecked Sendable {
+    private let socket: Int32
+    let port: UInt16
+    private let lock = NSLock()
+    private var running = true
+
+    init() throws {
+        let fd = Foundation.socket(AF_INET, PATH_SOCK_STREAM_VALUE, 0)
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        address.sin_port = 0
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0, listen(fd, 4) == 0 else {
+            throw CaptureServer.CaptureError(message: "could not bind loopback server")
+        }
+        var bound = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &bound) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        socket = fd
+        port = UInt16(bigEndian: bound.sin_port)
+        Thread.detachNewThread { [weak self] in
+            while let self, self.isRunning {
+                let client = accept(fd, nil, nil)
+                guard client >= 0 else { break }
+                self.handle(client: client)
+                close(client)
+            }
+        }
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+        close(socket)
+    }
+
+    private func handle(client: Int32) {
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        var contentLength = 0
+        var headerEnd: Int?
+        while true {
+            let count = read(client, &chunk, chunk.count)
+            guard count > 0 else { break }
+            data.append(contentsOf: chunk[0..<count])
+            if headerEnd == nil, let range = data.range(of: Data("\r\n\r\n".utf8)) {
+                headerEnd = range.upperBound
+                let head = String(decoding: data[..<range.lowerBound], as: UTF8.self)
+                for line in head.split(separator: "\r\n").dropFirst() {
+                    let parts = line.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2, parts[0].lowercased() == "content-length" {
+                        contentLength = Int(parts[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                    }
+                }
+            }
+            if let headerEnd, data.count - headerEnd >= contentLength {
+                break
+            }
+        }
+
+        let firstChunk = #"data: {"choices":[{"index":0,"delta":{"content":"x"}}]}"# + "\n\n"
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n\(firstChunk)"
+        _ = response.withCString { pointer in
+            write(client, pointer, response.utf8.count)
+        }
+
+        var sink = [UInt8](repeating: 0, count: 1024)
+        while isRunning {
+            let count = read(client, &sink, sink.count)
+            if count <= 0 { break }
+        }
     }
 }
 

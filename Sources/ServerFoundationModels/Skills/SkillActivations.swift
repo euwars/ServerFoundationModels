@@ -7,7 +7,9 @@ import Foundation
 /// activated during a language model session.
 ///
 /// Create an instance and pass it to ``Skills`` to provide the backing storage
-/// for skill activation state. It is safe to read from any thread.
+/// for skill activation state. Iteration and ``snapshot()`` copy the active
+/// names under a single lock acquisition; concurrent mutations do not affect an
+/// iteration already in progress.
 public final class SkillActivations: @unchecked Sendable {
     private let lock = NSLock()
     private var names: [String] = []
@@ -34,10 +36,15 @@ public final class SkillActivations: @unchecked Sendable {
     public func contains(_ name: String) -> Bool {
         withLock { names.contains(name) }
     }
+
+    /// Returns a copy of the active skill names under a single lock acquisition.
+    public func snapshot() -> [String] {
+        withLock { names }
+    }
 }
 
-extension SkillActivations: RandomAccessCollection {
-    public var startIndex: Int { withLock { names.startIndex } }
-    public var endIndex: Int { withLock { names.endIndex } }
-    public subscript(position: Int) -> String { withLock { names[position] } }
+extension SkillActivations: Sequence {
+    public func makeIterator() -> Array<String>.Iterator {
+        snapshot().makeIterator()
+    }
 }

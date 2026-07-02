@@ -13,6 +13,10 @@ public final class LanguageModelSession: @unchecked Sendable {
     private var _isResponding = false
     private var _usage = Usage()
     private var _errorPolicy: TranscriptErrorHandlingPolicy?
+    /// Cached from the most recent `prepareTurn` for `notifyResponse`.
+    private var _lastResolvedProfile: ResolvedProfile?
+    private var _profileActivated = false
+    private var prewarmHint: @Sendable (Transcript) -> Void = { _ in }
 
     var errorPolicy: TranscriptErrorHandlingPolicy? {
         get {
@@ -142,20 +146,22 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     private convenience init(erasingAny model: any LanguageModel, tools: [any Tool], instructionsText: String?) {
         func open<M: LanguageModel>(_ model: M) -> (
-            @Sendable (LanguageModelExecutorGenerationRequest, LanguageModelExecutorGenerationChannel) async throws -> Void
+            perform: @Sendable (LanguageModelExecutorGenerationRequest, LanguageModelExecutorGenerationChannel) async throws -> Void,
+            prewarm: @Sendable (Transcript) -> Void
         ) {
-            erasePerform(model)
+            (erasePerform(model), erasePrewarm(model))
         }
         self.init(erasing: SystemLanguageModel.default, tools: tools, instructionsText: instructionsText, transcript: nil)
-        let perform = open(model)
+        let dispatch = open(model)
         self.profileResolver = { [properties] in
             var resolved = SessionPropertyValues.$current.withValue(properties) {
                 ResolvedProfile()
             }
-            resolved.perform = perform
+            resolved.perform = dispatch.perform
             resolved.instructionsText = instructionsText
             return resolved
         }
+        self.prewarmHint = dispatch.prewarm
     }
 
     /// A session driven by standalone dynamic instructions.
@@ -201,6 +207,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         // is shared process-wide so re-evaluated profiles and multiple
         // sessions never construct duplicate executors for one configuration.
         self.perform = erasePerform(model)
+        self.prewarmHint = erasePrewarm(model)
 
         self.tools = tools.map { ErasedTool($0) }
         self.toolDefinitions = self.tools.map {
@@ -218,8 +225,14 @@ public final class LanguageModelSession: @unchecked Sendable {
     }
 
     public func prewarm(promptPrefix: Prompt? = nil) {
-        // Executor prewarming is a no-op for remote executors; on-device
-        // executors warm caches here.
+        var prewarmTranscript = transcript
+        if let promptPrefix {
+            prewarmTranscript.append(.prompt(Transcript.Prompt(
+                segments: [.text(.init(content: promptPrefix.text))]
+            )))
+        }
+        let hint = prewarmHint
+        Task.detached { hint(prewarmTranscript) }
     }
 
     // MARK: Respond — plain text
@@ -252,8 +265,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) async throws -> Response<String> {
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
-            options: options
+            options: options,
+            contextOptions: contextOptions
         ))
         return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
@@ -263,6 +278,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             )
 
             let responseEntry = Transcript.Response(
+                metadata: result.usage.metadata,
                 segments: transcriptResponseSegments(from: result)
             )
             appendEntry(.response(responseEntry))
@@ -287,7 +303,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) async throws -> Response<GeneratedContent> {
         try await respondStructured(
             to: prompt, schema: schema,
-            includeSchemaInPrompt: contextOptions.includeSchemaInPrompt ?? true,
+            includeSchemaInPrompt: nil,
             options: options, contextOptions: contextOptions, metadata: metadata
         )
     }
@@ -307,7 +323,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     private func respondStructured(
         to prompt: String,
         schema: GenerationSchema,
-        includeSchemaInPrompt: Bool,
+        includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
         metadata: [String: any Sendable & Codable & Equatable]
@@ -315,9 +331,11 @@ public final class LanguageModelSession: @unchecked Sendable {
         var contextOptions = contextOptions
         contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
             options: options,
-            responseFormat: Transcript.ResponseFormat(schema: schema)
+            responseFormat: Transcript.ResponseFormat(schema: schema),
+            contextOptions: contextOptions
         ))
         return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
@@ -328,6 +346,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             let content = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
 
             let responseEntry = Transcript.Response(
+                metadata: result.usage.metadata,
                 segments: transcriptResponseSegments(
                     from: result,
                     replacingTextWith: .structure(.init(content: content))
@@ -383,9 +402,11 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
         let schema = Content.generationSchema
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
             options: options,
-            responseFormat: Transcript.ResponseFormat(schema: schema)
+            responseFormat: Transcript.ResponseFormat(schema: schema),
+            contextOptions: contextOptions
         ))
         return try await withTurn(appending: promptEntry) { preCount in
             let result = try await generateLoop(
@@ -405,6 +426,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
 
             let responseEntry = Transcript.Response(
+                metadata: result.usage.metadata,
                 segments: transcriptResponseSegments(
                     from: result,
                     replacingTextWith: .structure(.init(content: raw))
@@ -436,8 +458,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<String>.Snapshot, any Swift.Error>
             .makeStream(bufferingPolicy: .bufferingNewest(1))
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
-            options: options
+            options: options,
+            contextOptions: contextOptions
         ))
 
         let generation = Task {
@@ -454,6 +478,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     }
 
                     let responseEntry = Transcript.Response(
+                        metadata: result.usage.metadata,
                         segments: transcriptResponseSegments(from: result)
                     )
                     appendEntry(.response(responseEntry))
@@ -517,9 +542,11 @@ public final class LanguageModelSession: @unchecked Sendable {
         let effectiveContextOptions = contextOptions
         let schema = Content.generationSchema
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
             options: options,
-            responseFormat: Transcript.ResponseFormat(schema: schema)
+            responseFormat: Transcript.ResponseFormat(schema: schema),
+            contextOptions: effectiveContextOptions
         ))
 
         let generation = Task {
@@ -549,6 +576,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                         ))
                     }
                     let responseEntry = Transcript.Response(
+                        metadata: result.usage.metadata,
                         segments: transcriptResponseSegments(
                             from: result,
                             replacingTextWith: .structure(.init(content: raw))
@@ -744,9 +772,11 @@ public final class LanguageModelSession: @unchecked Sendable {
         contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
         let effectiveContextOptions = contextOptions
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
+            metadata: metadata,
             segments: [.text(.init(content: prompt))],
             options: options,
-            responseFormat: Transcript.ResponseFormat(schema: schema)
+            responseFormat: Transcript.ResponseFormat(schema: schema),
+            contextOptions: effectiveContextOptions
         ))
         let generation = Task {
             do {
@@ -763,6 +793,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     }
                     let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
                     let responseEntry = Transcript.Response(
+                        metadata: result.usage.metadata,
                         segments: transcriptResponseSegments(
                             from: result,
                             replacingTextWith: .structure(.init(content: raw))
@@ -927,8 +958,27 @@ public final class LanguageModelSession: @unchecked Sendable {
         // the session's `history` property during resolution; the session
         // adopts whatever they leave behind.
         properties.history = allEntries[...]
-        guard let profileResolver else { return (nil, options, transcript) }
+        guard let profileResolver else {
+            lock.lock()
+            _lastResolvedProfile = nil
+            lock.unlock()
+            return (nil, options, transcript)
+        }
         let resolved = SessionPropertyValues.$current.withValue(properties) { profileResolver() }
+
+        // Profile activation contract: the first resolution invokes
+        // `onActivate` handlers. Without a stable profile identity key,
+        // later re-resolutions are treated as the same profile (no
+        // deactivate/activate cycle). Handlers run outside the lock.
+        var activateHandlers: [() async -> Void] = []
+        lock.lock()
+        _lastResolvedProfile = resolved
+        if !_profileActivated {
+            _profileActivated = true
+            activateHandlers = resolved.onActivate
+        }
+        lock.unlock()
+        for action in activateHandlers { await action() }
 
         // onPrompt callbacks run with the session's properties bound so
         // history modifiers (e.g. rolling windows) can rewrite `history`;
@@ -946,10 +996,9 @@ public final class LanguageModelSession: @unchecked Sendable {
             case .prompt, .toolOutput:
                 break
             default:
-                throw LanguageModelTransportError(
-                    statusCode: 0,
-                    message: "Transcript must end with a .prompt or .toolOutput entry."
-                )
+                throw SessionControlError(reason: .invalidTranscript(
+                    description: "Transcript must end with a .prompt or .toolOutput entry."
+                ))
             }
         }
 
@@ -981,10 +1030,9 @@ public final class LanguageModelSession: @unchecked Sendable {
             case .prompt, .toolOutput:
                 break
             default:
-                throw LanguageModelTransportError(
-                    statusCode: 0,
-                    message: "Transcript must end with a .prompt or .toolOutput entry."
-                )
+                throw SessionControlError(reason: .invalidTranscript(
+                    description: "Transcript must end with a .prompt or .toolOutput entry."
+                ))
             }
             requestEntries = requestInstructions + filtered
         }
@@ -1028,10 +1076,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         while true {
             rounds += 1
             if rounds > Self.maximumToolRounds {
-                throw LanguageModelTransportError(
-                    statusCode: 0,
-                    message: "the tool-call loop exceeded \(Self.maximumToolRounds) rounds without producing a final response"
-                )
+                throw SessionControlError(reason: .toolLoopLimitReached(limit: Self.maximumToolRounds))
             }
             // The profile is dynamic: it re-resolves before every round, so a
             // tool that changes state mid-loop (e.g. activating a skill)
@@ -1068,6 +1113,7 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             var text = ""
             var reasoning = ""
+            var reasoningSignature: Data?
             var usage = Usage()
             var toolCallOrder: [String] = []
             var toolCallAccumulator: [String: (name: String, argumentsJSON: String)] = [:]
@@ -1075,6 +1121,14 @@ public final class LanguageModelSession: @unchecked Sendable {
             var recordedOutputs: [Transcript.ToolOutput] = []
             var responseSegments: [Transcript.Segment] = []
             var customSegmentIndices: [String: Int] = [:]
+            var attachmentSegmentIndices: [String: Int] = [:]
+            var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
+
+            func mergeMetadata(_ values: [String: any Sendable & Codable & Equatable]) {
+                for (key, value) in values {
+                    responseMetadata[key] = value
+                }
+            }
 
             func upsertCustomSegment(_ segment: any Transcript.CustomSegment) {
                 if let index = customSegmentIndices[segment.id] {
@@ -1093,6 +1147,23 @@ public final class LanguageModelSession: @unchecked Sendable {
                 } else {
                     responseSegments.append(.text(.init(content: fragment)))
                 }
+            }
+
+            func upsertAttachmentSegment(_ segment: Transcript.AttachmentSegment) {
+                if let index = attachmentSegmentIndices[segment.id] {
+                    responseSegments[index] = .attachment(segment)
+                } else {
+                    attachmentSegmentIndices[segment.id] = responseSegments.count
+                    responseSegments.append(.attachment(segment))
+                }
+            }
+
+            func removeAttachmentSegment(id: String) {
+                guard let index = attachmentSegmentIndices[id] else { return }
+                responseSegments.remove(at: index)
+                attachmentSegmentIndices.removeValue(forKey: id)
+                attachmentSegmentIndices = attachmentSegmentIndices.mapValues { $0 > index ? $0 - 1 : $0 }
+                customSegmentIndices = customSegmentIndices.mapValues { $0 > index ? $0 - 1 : $0 }
             }
 
             // Streamed usage reports are running totals: the latest report
@@ -1125,8 +1196,12 @@ public final class LanguageModelSession: @unchecked Sendable {
                         upsertCustomSegment(segment)
                     case .updateUsage(let reported):
                         accumulate(reported)
-                    case .addAttachmentSegment, .removeAttachmentSegment, .updateMetadata:
-                        break
+                    case .addAttachmentSegment(let segment):
+                        upsertAttachmentSegment(segment)
+                    case .removeAttachmentSegment(let id):
+                        removeAttachmentSegment(id: id)
+                    case .updateMetadata(let reported):
+                        mergeMetadata(reported.values)
                     }
                 case let reasoningEvent as LanguageModelExecutorGenerationChannel.Reasoning:
                     switch reasoningEvent.action {
@@ -1136,7 +1211,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                         reasoning = replacement.content
                     case .updateUsage(let reported):
                         accumulate(reported)
-                    case .updateSignature, .updateMetadata:
+                    case .updateSignature(let signature):
+                        reasoningSignature = signature.signature
+                    case .updateMetadata:
                         break
                     }
                 case let toolEvent as LanguageModelExecutorGenerationChannel.ToolCalls:
@@ -1186,13 +1263,15 @@ public final class LanguageModelSession: @unchecked Sendable {
             turnUsage.input.cachedTokenCount += usage.input.cachedTokenCount
             turnUsage.output.totalTokenCount += usage.output.totalTokenCount
             turnUsage.output.reasoningTokenCount += usage.output.reasoningTokenCount
+            mergeMetadata(into: &turnUsage.metadata, from: responseMetadata)
             recordUsage(usage)
 
             // The model's thinking is part of the durable record, ahead of
             // the response it led to.
-            if !reasoning.isEmpty {
+            if !reasoning.isEmpty || reasoningSignature != nil {
                 appendEntry(.reasoning(Transcript.Reasoning(
-                    segments: [.text(.init(content: reasoning))]
+                    segments: reasoning.isEmpty ? [] : [.text(.init(content: reasoning))],
+                    signature: reasoningSignature
                 )))
             }
 
@@ -1248,7 +1327,10 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             for call in transcriptCalls {
                 guard let tool = activeTools.first(where: { $0.name == call.toolName }) else {
-                    throw LanguageModelTransportError(statusCode: 0, message: "the model called unregistered tool \(call.toolName)")
+                    throw ToolCallError(
+                        tool: UnregisteredToolReference(name: call.toolName),
+                        underlyingError: UnregisteredToolCall(toolName: call.toolName)
+                    )
                 }
                 let output: String
                 do {
@@ -1275,7 +1357,11 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     /// Invokes the resolved profile's onResponse callbacks for a new entry.
     func notifyResponse(_ response: Transcript.Response) async throws {
-        guard let resolved = SessionPropertyValues.$current.withValue(properties, operation: { profileResolver?() }) else { return }
+        let resolved: ResolvedProfile?
+        lock.lock()
+        resolved = _lastResolvedProfile
+        lock.unlock()
+        guard let resolved else { return }
         for action in resolved.onResponse { try await action(response) }
     }
 
@@ -1371,15 +1457,35 @@ public final class LanguageModelSession: @unchecked Sendable {
 
     static func stripCodeFences(from text: String) -> String {
         var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("```") {
-            trimmed = trimmed
-                .drop(while: { $0 != "\n" })
+        guard trimmed.hasPrefix("```") else { return trimmed }
+        if trimmed.contains("\n") {
+            trimmed = String(trimmed.drop(while: { $0 != "\n" }).dropFirst())
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasSuffix("```") {
                 trimmed = String(trimmed.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
             }
+            return trimmed
         }
-        return trimmed
+        var inner = String(trimmed.dropFirst(3))
+        if inner.hasSuffix("```") {
+            inner = String(inner.dropLast(3))
+        }
+        inner = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = inner.first, first.isLetter,
+            let contentStart = inner.firstIndex(where: { $0 == "{" || $0 == "[" })
+        {
+            inner = String(inner[contentStart...])
+        }
+        return inner.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func mergeMetadata(
+        into target: inout [String: any Sendable & Codable & Equatable],
+        from source: [String: any Sendable & Codable & Equatable]
+    ) {
+        for (key, value) in source {
+            target[key] = value
+        }
     }
 
     // MARK: Response types
@@ -1485,6 +1591,9 @@ public final class LanguageModelSession: @unchecked Sendable {
 /// configuration) pair, however many sessions or re-evaluated profile bodies
 /// ask for it — `.model(...)` inside a dynamic profile must not construct a
 /// new executor (and e.g. a new HTTP connection pool) on every request.
+///
+/// The cache never evicts entries, so distinct per-user configurations grow
+/// without bound for the lifetime of the process.
 final class SharedExecutorRegistry: @unchecked Sendable {
     static let shared = SharedExecutorRegistry()
 
@@ -1502,11 +1611,57 @@ final class SharedExecutorRegistry: @unchecked Sendable {
     ) throws -> Executor {
         let key = Key(executorType: ObjectIdentifier(Executor.self), configuration: AnyHashable(configuration))
         lock.lock()
+        if let cached = executors[key] as? Executor {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let constructed = try Executor(configuration: configuration)
+
+        lock.lock()
         defer { lock.unlock() }
         if let cached = executors[key] as? Executor { return cached }
-        let executor = try Executor(configuration: configuration)
-        executors[key] = executor
-        return executor
+        executors[key] = constructed
+        return constructed
+    }
+}
+
+func erasePrewarm<Model: LanguageModel>(_ model: Model) -> @Sendable (Transcript) -> Void {
+    let configuration = model.executorConfiguration
+    return { transcript in
+        guard let executor = try? SharedExecutorRegistry.shared.executor(
+            for: configuration, as: Model.Executor.self
+        ) else { return }
+        executor.prewarm(model: model, transcript: transcript)
+    }
+}
+
+private struct UnregisteredToolCall: LocalizedError {
+    let toolName: String
+    var errorDescription: String? { "the model called unregistered tool \(toolName)" }
+}
+
+private struct UnregisteredToolReference: Tool {
+    typealias Arguments = GeneratedContent
+    typealias Output = String
+
+    let registeredName: String
+    var name: String { registeredName }
+    var description: String { "Tool registered by name only for error reporting." }
+    var parameters: GenerationSchema {
+        try! GenerationSchema(
+            root: DynamicGenerationSchema(name: "arguments", properties: []),
+            dependencies: []
+        )
+    }
+
+    init(name: String) {
+        self.registeredName = name
+    }
+
+    func call(arguments: GeneratedContent) async throws -> String {
+        throw UnregisteredToolCall(toolName: registeredName)
     }
 }
 

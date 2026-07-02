@@ -896,7 +896,10 @@ struct DifferentialParityScenarios {
             break  // abandon the stream mid-generation
         }
         #expect(sawSnapshot)
-        try await Task.sleep(for: .seconds(2))
+        for _ in 0..<100 {
+            if session.isResponding == false { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
         #expect(session.isResponding == false, "generation must not keep running after the consumer leaves")
     }
 

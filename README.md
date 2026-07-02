@@ -21,7 +21,8 @@ API, verified signature-for-signature against Apple's interface.
   signature-for-signature (**0 gaps**). Swap the import; your code, macros, and
   tools compile unchanged.
 - **Runs anywhere.** Linux, servers, containers — concurrency-stress- and
-  soak-tested, and proven inside Vapor and Hummingbird handlers.
+  soak-tested (opt-in local runs via `PARITY_STRESS`/`PARITY_SOAK`), and proven
+  inside Vapor and Hummingbird handlers.
 - **Real providers.** Any OpenAI-compatible endpoint (`ChatCompletionsLanguageModel`)
   and a native **xAI Grok** provider (`XAILanguageModel`) with server-side web/X
   search, `previous_response_id` threading, and prompt-prefix caching.
@@ -359,8 +360,9 @@ pipelines research → verify per angle so a slow verify never blocks the others
 
 ## How parity is proven
 
-The claim "just replace the import" is enforced by five independent gates,
-all in CI:
+The claim "just replace the import" is enforced by five independent gates.
+Gates 1, 3, 4, and 5 run in CI on every push; gate 2 (the Apple-oracle
+suite) requires a self-hosted macOS 27 runner with Apple Intelligence.
 
 1. **Signature diff** — every public declaration in Apple's vendored
    macOS 27 `.swiftinterface` (818 checked) must exist here with a
@@ -380,8 +382,8 @@ all in CI:
    only the import swapped.
 
 ```sh
-swift test                                          # this library
-swift test --filter AppleFoundationModelsParityTests  # Apple oracle (macOS 27)
+swift test                                                    # this library
+INCLUDE_APPLE_PARITY_TESTS=1 swift test --filter AppleFoundationModelsParityTests  # Apple oracle (Xcode 27)
 ```
 
 ## Production
@@ -437,3 +439,5 @@ CI runs the same XAI unit-test filter in the `linux` job (`.github/workflows/ci.
 - Swift 6.2+ (Linux: `swift:6.2` Docker image or newer)
 - Apple platforms: macOS 27 / iOS 27 SDK (Xcode 27 beta) for the
   `SystemLanguageModel` bridge and the Apple-oracle test target
+- Command-Line Tools only (no full Xcode): set `SKIP_MACRO_TESTS=1` to skip
+  the `@Generable`/`@Guide` macro test target

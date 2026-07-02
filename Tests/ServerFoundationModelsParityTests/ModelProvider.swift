@@ -50,6 +50,18 @@ enum ParityModel {
                 semaphore.signal()
             }.resume()
             semaphore.wait()
+            if flag.value {
+                fputs("""
+
+                ═══════════════════════════════════════════════════════════════════
+                PARITY LIVE MODEL DETECTED — behavioral suites ACTIVATED
+                Backend: ChatCompletionsLanguageModel
+                URL: \(baseURL.absoluteString)  Model: \(modelName)
+                To opt out: unset PARITY_BACKEND, or stop the server at \(baseURL.absoluteString)
+                ═══════════════════════════════════════════════════════════════════
+
+                """, stderr)
+            }
             return flag.value
         }
         return SystemLanguageModel.default.isAvailable

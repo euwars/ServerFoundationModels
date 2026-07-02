@@ -92,12 +92,47 @@ import Testing
         {"type":"response.completed","response":{"id":"r1","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"getWeather","arguments":"{\\"city\\":\\"Tokyo\\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}}
         """
         let actions = try acc.ingest(payload: completed)
-        let call = actions.compactMap { action -> (name: String, args: String)? in
-            if case .toolCall(_, let name, let args) = action { return (name, args) }
+        let call = actions.compactMap { action -> (id: String, name: String, args: String)? in
+            if case .toolCall(let id, let name, let args) = action { return (id, name, args) }
             return nil
         }.first
         #expect(call?.name == "getWeather")
+        #expect(call?.id == "call_1")
         #expect(call?.args.contains("Tokyo") == true)
+    }
+
+    @Test func skipsMalformedSSEFrame() throws {
+        var acc = XAIResponseStream.Accumulator()
+        let skipped = try acc.ingest(payload: "not valid json{{{")
+        #expect(skipped.isEmpty)
+        let delta = try acc.ingest(payload: #"{"type":"response.output_text.delta","delta":"hi"}"#)
+        #expect(delta.count == 1)
+    }
+
+    @Test func streamRateLimitMapsToTypedError() throws {
+        var acc = XAIResponseStream.Accumulator()
+        do {
+            _ = try acc.ingest(payload: #"{"type":"error","code":429,"message":"rate limited"}"#)
+            Issue.record("expected rateLimited error")
+        } catch let error as LanguageModelError {
+            guard case .rateLimited = error else {
+                Issue.record("expected rateLimited, got \(error)")
+            }
+        }
+    }
+
+    @Test func streamContextOverflowMapsToTypedError() throws {
+        var acc = XAIResponseStream.Accumulator()
+        do {
+            _ = try acc.ingest(payload: """
+            {"type":"response.failed","response":{"error":{"code":400,"message":"maximum context length exceeded"}}}
+            """)
+            Issue.record("expected contextSizeExceeded error")
+        } catch let error as LanguageModelError {
+            guard case .contextSizeExceeded = error else {
+                Issue.record("expected contextSizeExceeded, got \(error)")
+            }
+        }
     }
 }
 

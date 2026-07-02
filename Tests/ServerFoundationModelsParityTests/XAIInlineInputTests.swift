@@ -79,4 +79,29 @@ import Testing
         let types = arr?.compactMap { $0["type"] as? String } ?? []
         #expect(!types.contains("reasoning"))
     }
+
+    @Test func anyToJSONNodePreservesZeroOneAndBool() {
+        let dict: [String: Any] = ["start_index": 0, "flag": true, "count": 1]
+        let node = anyToJSONNode(dict)
+        guard case .object(let members) = node else {
+            Issue.record("expected object node")
+            return
+        }
+        let byKey = Dictionary(uniqueKeysWithValues: members.map { ($0.key, $0.value) })
+        if case .integer(let value) = byKey["start_index"] {
+            #expect(value == 0)
+        } else {
+            Issue.record("start_index should be .integer(0)")
+        }
+        if case .bool(let value) = byKey["flag"] {
+            #expect(value == true)
+        } else {
+            Issue.record("flag should be .boolean(true)")
+        }
+        if case .integer(let value) = byKey["count"] {
+            #expect(value == 1)
+        } else {
+            Issue.record("count should be .integer(1)")
+        }
+    }
 }

@@ -3,7 +3,7 @@
 
 import Foundation
 
-public enum XAILiveServerToolsScenario {
+public enum XAIServerToolsValidationScenario {
     /// Matches xAI docs overview quick-start: web_search + x_search together.
     /// https://docs.x.ai/developers/tools/overview
     public static let serverTools: Set<XAIServerTool> = [.webSearch, .xSearch]
