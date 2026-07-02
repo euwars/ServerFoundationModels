@@ -1576,11 +1576,19 @@ final class GenerableMacroTests: XCTestCase {
             }
             """,
             diagnostics: [
+                // SwiftSyntax rejects multi-binding vars for accessor/peer
+                // macros before macro code runs; these system diagnostics
+                // are the real-world behavior.
                 DiagnosticSpec(
-                    message: "@SessionPropertyEntry does not support multiple bindings in one declaration",
-                    line: 3,
+                    message: "accessor macro can only be applied to a single variable",
+                    line: 2,
                     column: 5
-                )
+                ),
+                DiagnosticSpec(
+                    message: "peer macro can only be applied to a single variable",
+                    line: 2,
+                    column: 5
+                ),
             ],
             macros: macros
         )

@@ -38,15 +38,9 @@ jobs:
           python3 scripts/interface-diff.py \
             reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 
-  # Darwin URLSession transport paths (full Xcode; macro tests included).
-  macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build
-        run: swift build --build-tests
-      - name: Test
-        run: swift test
+  # No hosted macOS job: the package targets the macOS 27 SDK (Xcode 27
+  # beta), which GitHub-hosted images do not ship (macos-26 tops out at
+  # Xcode 26.x). Darwin coverage runs on the self-hosted macos-parity job.
 
   # Real third-party packages: swap import, run their test suites.
   compat:
@@ -54,6 +48,8 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@v4
+      - name: Install script dependencies
+        run: apt-get update -qq && apt-get install -y -qq python3 > /dev/null
       - name: Third-party compatibility check
         run: bash scripts/compat-check.sh
 
