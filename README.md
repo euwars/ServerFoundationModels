@@ -361,8 +361,9 @@ pipelines research → verify per angle so a slow verify never blocks the others
 ## How parity is proven
 
 The claim "just replace the import" is enforced by five independent gates.
-Gates 1, 3, 4, and 5 run in CI on every push; gate 2 (the Apple-oracle
-suite) requires a self-hosted macOS 27 runner with Apple Intelligence.
+Gates 1, 3, and 4 run in CI on every push. Gates 2 (the Apple-oracle suite)
+and 5 (the third-party corpus, whose packages build only on Apple
+platforms) run on a self-hosted macOS 27 runner via the same workflow.
 
 1. **Signature diff** — every public declaration in Apple's vendored
    macOS 27 `.swiftinterface` (818 checked) must exist here with a

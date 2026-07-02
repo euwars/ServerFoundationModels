@@ -5,9 +5,11 @@ behaves identically against ServerFoundationModels after changing one line —
 `import FoundationModels` → `import ServerFoundationModels`.**
 
 Five independent verification layers enforce it, each catching a class of
-divergence the others can't. All are machine-checkable; layers 1, 2, and 4
-run in CI on every push (layer 3's live suites self-gate when no model is
-reachable; the Apple-oracle half of layer 3 is self-hosted only).
+divergence the others can't. All are machine-checkable; layers 1 and 2 run
+in CI on every push (layer 3's live suites self-gate when no model is
+reachable; the Apple-oracle half of layer 3 and layer 4's third-party
+corpus — Apple-platforms-only packages — run on the self-hosted macOS
+runner via `scripts/compat-check.sh`).
 
 ## Layer 1 — Signature-level interface diff (compile-time surface)
 

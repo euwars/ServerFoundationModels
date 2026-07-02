@@ -4,7 +4,17 @@
 # runs their complete test suites.
 #
 # Usage: scripts/compat-check.sh [cache-dir]
+#
+# Requires macOS: both corpus packages declare Apple-only platforms and use
+# Darwin Foundation API shapes (URLSession.bytes, URL optionality) that
+# corelibs-foundation does not provide — their own suites cannot run on
+# Linux regardless of which FoundationModels implementation they import.
 set -euo pipefail
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "compat-check requires macOS (corpus packages target Apple platforms only)" >&2
+  exit 2
+fi
 
 LF_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="${1:-/tmp/lf-compat}"
@@ -42,13 +52,19 @@ import re, sys
 path, target, lf = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path).read()
 if lf not in s:
-    s = re.sub(r"(\n  targets: \[)", f'\n  dependencies: [\n    .package(path: "{lf}")\n  ],\\1', s, count=1)
+    s = re.sub(r"(\n  targets: \[)", f'\n  dependencies: [\n    .package(name: "ServerFoundationModels", path: "{lf}")\n  ],\\1', s, count=1)
+    product = '.product(name: "ServerFoundationModels", package: "ServerFoundationModels")'
+    def add_product(m):
+        existing = m.group(3)
+        # An empty dependency list must not gain a leading comma.
+        joined = existing + ", " + product if existing.strip() else product
+        return m.group(1) + m.group(2) + joined + "]"
     s = re.sub(
         rf'(name: "{target}",\n)(      dependencies: \[)([^\]]*)\]',
-        rf'\1\2\3, .product(name: "ServerFoundationModels", package: "ServerFoundationModels")]',
+        add_product,
         s, count=1) if f'name: "{target}",\n      dependencies: [' in s else re.sub(
         rf'(\.target\(\n      name: "{target}")',
-        rf'\1,\n      dependencies: [.product(name: "ServerFoundationModels", package: "ServerFoundationModels")]',
+        rf'\1,\n      dependencies: [{product}]',
         s, count=1)
 open(path, 'w').write(s)
 PYEOF
@@ -67,8 +83,12 @@ run() {
   local log
   log=$(mktemp)
   if ! (cd "$dir" && swift test --build-system native ${filter:+--filter "$filter"} >"$log" 2>&1); then
-    echo "=== $name: FAILED (last 30 lines)" >&2
-    tail -30 "$log" >&2
+    # Parallel-compile noise buries the diagnostic; print error context,
+    # plus the tail for failures nothing greps as an error.
+    echo "=== $name: FAILED (error context)" >&2
+    grep -B3 -A10 -E "error:|: fatal" "$log" | head -120 >&2
+    echo "=== $name: last 15 lines" >&2
+    tail -15 "$log" >&2
     rm -f "$log"
     exit 1
   fi
