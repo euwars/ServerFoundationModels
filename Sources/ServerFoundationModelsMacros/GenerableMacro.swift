@@ -291,6 +291,17 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             }
         }
         guard !caseNames.isEmpty else {
+            // Associated-value cases were already diagnosed above; only a
+            // truly empty enum needs its own error.
+            if !declaration.memberBlock.members.contains(where: { $0.decl.is(EnumCaseDeclSyntax.self) }) {
+                context.diagnose(Diagnostic(
+                    node: Syntax(declaration.name),
+                    message: GenerableDiagnostic(
+                        "@Generable enums must declare at least one case",
+                        id: "emptyEnum"
+                    )
+                ))
+            }
             return []
         }
 

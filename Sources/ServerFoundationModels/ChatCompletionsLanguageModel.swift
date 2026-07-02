@@ -5,6 +5,7 @@
 
 import Foundation
 import Logging
+import Synchronization
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -276,18 +277,18 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             }
         }
 
-        private static let plainHTTPAuthWarningLock = NSLock()
-        private static var plainHTTPAuthWarningLogged = false
+        private static let plainHTTPAuthWarningLogged = Mutex(false)
 
         static func warnIfPlainHTTPAuthorization(
             endpoint: URL, headers: [String: String], logger: Logger
         ) {
             guard endpoint.scheme?.lowercased() == "http",
                 headers.contains(where: { $0.key.lowercased() == "authorization" }) else { return }
-            plainHTTPAuthWarningLock.lock()
-            let shouldLog = !plainHTTPAuthWarningLogged
-            if shouldLog { plainHTTPAuthWarningLogged = true }
-            plainHTTPAuthWarningLock.unlock()
+            let shouldLog = plainHTTPAuthWarningLogged.withLock { logged -> Bool in
+                guard !logged else { return false }
+                logged = true
+                return true
+            }
             if shouldLog {
                 logger.warning("sending Authorization header over plain HTTP", metadata: [
                     "host": .string(endpoint.host ?? "?"),
@@ -562,14 +563,18 @@ enum HTTPLineStream {
 }
 
 #if !canImport(Darwin)
+import Synchronization
+
 /// One shared URLSession for all SSE requests; the router delegate fans
 /// events out to per-task line streams. (Per-request URLSession instances
 /// churn file descriptors and worker threads under production load.)
+///
+/// @unchecked Sendable invariant: `handlers` is guarded by `Mutex`; delegate
+/// callbacks run on URLSession's queue and never escape handler references.
 final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = LinuxSSESession()
 
-    private let lock = NSLock()
-    private var handlers: [Int: LineStreamDelegate] = [:]
+    private let handlers = Mutex([Int: LineStreamDelegate]())
     // Eagerly created: a `lazy var` is not thread-safe, and a first-use race
     // from concurrent sessions can construct several URLSessions whose
     // per-session taskIdentifiers collide in `handlers`, routing events to
@@ -591,17 +596,13 @@ final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private func register(_ request: URLRequest) -> (LineStreamDelegate, URLSessionDataTask) {
         let handler = LineStreamDelegate()
         let task = session.dataTask(with: request)
-        lock.lock()
-        handlers[task.taskIdentifier] = handler
-        lock.unlock()
+        handlers.withLock { $0[task.taskIdentifier] = handler }
         handler.onTerminate = { [weak task] in task?.cancel() }
         return (handler, task)
     }
 
     private func handler(for task: URLSessionTask) -> LineStreamDelegate? {
-        lock.lock()
-        defer { lock.unlock() }
-        return handlers[task.taskIdentifier]
+        handlers.withLock { $0[task.taskIdentifier] }
     }
 
     func urlSession(
@@ -619,21 +620,24 @@ final class LinuxSSESession: NSObject, URLSessionDataDelegate, @unchecked Sendab
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let finished = handler(for: task)
-        lock.lock()
-        handlers.removeValue(forKey: task.taskIdentifier)
-        lock.unlock()
+        handlers.withLock { _ = $0.removeValue(forKey: task.taskIdentifier) }
         finished?.complete(error: error)
     }
 }
 #endif
 
 #if !canImport(Darwin)
+private struct LineStreamState {
+    var buffer = Data()
+    var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
+    var storedResponse: HTTPURLResponse?
+    var finishedEarly: (any Error)??
+}
+
+/// @unchecked Sendable invariant: stream state is guarded by `Mutex`;
+/// continuations are resumed outside the lock after being taken.
 final class LineStreamDelegate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    private var responseContinuation: CheckedContinuation<HTTPURLResponse, any Error>?
-    private var storedResponse: HTTPURLResponse?
-    private var finishedEarly: (any Error)??
+    private let state = Mutex(LineStreamState())
 
     var onTerminate: (@Sendable () -> Void)?
 
@@ -653,18 +657,30 @@ final class LineStreamDelegate: @unchecked Sendable {
         // cancellation error instead of stranding the continuation.
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.lock()
-                if let storedResponse {
-                    lock.unlock()
-                    continuation.resume(returning: storedResponse)
-                } else if let finishedEarly {
-                    lock.unlock()
-                    continuation.resume(throwing: finishedEarly ?? LanguageModelTransportError(
-                        statusCode: 0, message: "connection closed before a response arrived"
-                    ))
-                } else {
-                    responseContinuation = continuation
-                    lock.unlock()
+                enum Outcome {
+                    case stored(HTTPURLResponse)
+                    case failed(any Error)
+                    case pending
+                }
+                let outcome = state.withLock { snapshot -> Outcome in
+                    if let storedResponse = snapshot.storedResponse {
+                        return .stored(storedResponse)
+                    }
+                    if let finishedEarly = snapshot.finishedEarly {
+                        return .failed(finishedEarly ?? LanguageModelTransportError(
+                            statusCode: 0, message: "connection closed before a response arrived"
+                        ))
+                    }
+                    snapshot.responseContinuation = continuation
+                    return .pending
+                }
+                switch outcome {
+                case .stored(let response):
+                    continuation.resume(returning: response)
+                case .failed(let error):
+                    continuation.resume(throwing: error)
+                case .pending:
+                    break
                 }
             }
         } onCancel: {
@@ -673,11 +689,12 @@ final class LineStreamDelegate: @unchecked Sendable {
     }
 
     func receive(response: URLResponse) {
-        lock.lock()
-        storedResponse = response as? HTTPURLResponse
-        let continuation = responseContinuation
-        responseContinuation = nil
-        lock.unlock()
+        let continuation = state.withLock { snapshot -> CheckedContinuation<HTTPURLResponse, any Error>? in
+            snapshot.storedResponse = response as? HTTPURLResponse
+            let continuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            return continuation
+        }
         if let continuation {
             if let http = response as? HTTPURLResponse {
                 continuation.resume(returning: http)
@@ -690,35 +707,39 @@ final class LineStreamDelegate: @unchecked Sendable {
     }
 
     func receive(data: Data) {
-        lock.lock()
-        buffer.append(data)
-        var emitted: [String] = []
-        var lineStart = buffer.startIndex
-        while lineStart < buffer.endIndex,
-            let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
-            emitted.append(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
-            lineStart = buffer.index(after: newline)
+        let emitted = state.withLock { snapshot -> [String] in
+            snapshot.buffer.append(data)
+            var lines: [String] = []
+            var lineStart = snapshot.buffer.startIndex
+            while lineStart < snapshot.buffer.endIndex,
+                let newline = snapshot.buffer[lineStart...].firstIndex(of: 0x0A) {
+                lines.append(HTTPLineStream.decodeLine(snapshot.buffer[lineStart..<newline]))
+                lineStart = snapshot.buffer.index(after: newline)
+            }
+            if lineStart != snapshot.buffer.startIndex {
+                snapshot.buffer.removeSubrange(snapshot.buffer.startIndex..<lineStart)
+            }
+            return lines
         }
-        if lineStart != buffer.startIndex {
-            buffer.removeSubrange(buffer.startIndex..<lineStart)
-        }
-        lock.unlock()
         for line in emitted {
             lineContinuation.yield(line)
         }
     }
 
     func complete(error: (any Error)?) {
-        lock.lock()
-        if !buffer.isEmpty {
-            let trailing = HTTPLineStream.decodeLine(buffer)
-            buffer.removeAll()
-            lineContinuation.yield(trailing)
+        let trailing = state.withLock { snapshot -> String? in
+            guard !snapshot.buffer.isEmpty else { return nil }
+            let text = HTTPLineStream.decodeLine(snapshot.buffer)
+            snapshot.buffer.removeAll()
+            return text
         }
-        let continuation = responseContinuation
-        responseContinuation = nil
-        finishedEarly = .some(error)
-        lock.unlock()
+        if let trailing { lineContinuation.yield(trailing) }
+        let continuation = state.withLock { snapshot -> CheckedContinuation<HTTPURLResponse, any Error>? in
+            let continuation = snapshot.responseContinuation
+            snapshot.responseContinuation = nil
+            snapshot.finishedEarly = .some(error)
+            return continuation
+        }
         if let continuation {
             continuation.resume(throwing: error ?? LanguageModelTransportError(
                 statusCode: 0, message: "connection closed before a response arrived"
@@ -797,58 +818,58 @@ extension HTTPLineStream {
         }
 
         let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
-        var pump: Task<Void, any Error>!
-        pump = Task {
-            var buffer = Data()
-            var idleWatchdog: Task<Void, Never>?
-            defer { idleWatchdog?.cancel() }
+        let pumpBox = Mutex<Task<Void, any Error>?>(nil)
+        pumpBox.withLock { box in
+            box = Task {
+                var buffer = Data()
+                var idleWatchdog: Task<Void, Never>?
+                defer { idleWatchdog?.cancel() }
 
-            func armIdleWatchdog() {
-                idleWatchdog?.cancel()
-                idleWatchdog = Task {
-                    try? await Task.sleep(nanoseconds: idleNanos)
-                    guard !Task.isCancelled else { return }
-                    pump.cancel()
-                    continuation.finish(throwing: URLError(.timedOut))
-                }
-            }
-
-            do {
-                armIdleWatchdog()
-                for try await chunk in response.body {
+                func armIdleWatchdog() {
                     idleWatchdog?.cancel()
-                    try Task.checkCancellation()
-                    buffer.append(contentsOf: chunk.readableBytesView)
-                    // Advance a cursor over the buffered bytes and compact the
-                    // consumed prefix once per chunk. Removing each line from the
-                    // front instead would re-shift the tail per line — O(n²) over
-                    // a chunk with many lines.
-                    var lineStart = buffer.startIndex
-                    while let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
-                        continuation.yield(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
-                        lineStart = buffer.index(after: newline)
+                    idleWatchdog = Task {
+                        try? await Task.sleep(nanoseconds: idleNanos)
+                        guard !Task.isCancelled else { return }
+                        pumpBox.withLock { $0?.cancel() }
+                        continuation.finish(throwing: URLError(.timedOut))
                     }
-                    if lineStart != buffer.startIndex {
-                        buffer.removeSubrange(buffer.startIndex..<lineStart)
-                    }
+                }
+
+                do {
                     armIdleWatchdog()
+                    for try await chunk in response.body {
+                        idleWatchdog?.cancel()
+                        try Task.checkCancellation()
+                        buffer.append(contentsOf: chunk.readableBytesView)
+                        // Advance a cursor over the buffered bytes and compact the
+                        // consumed prefix once per chunk. Removing each line from the
+                        // front instead would re-shift the tail per line — O(n²) over
+                        // a chunk with many lines.
+                        var lineStart = buffer.startIndex
+                        while let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
+                            continuation.yield(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
+                            lineStart = buffer.index(after: newline)
+                        }
+                        if lineStart != buffer.startIndex {
+                            buffer.removeSubrange(buffer.startIndex..<lineStart)
+                        }
+                        armIdleWatchdog()
+                    }
+                    idleWatchdog?.cancel()
+                    if !buffer.isEmpty {
+                        continuation.yield(HTTPLineStream.decodeLine(buffer))
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    idleWatchdog?.cancel()
+                } catch {
+                    idleWatchdog?.cancel()
+                    continuation.finish(throwing: error)
                 }
-                idleWatchdog?.cancel()
-                if !buffer.isEmpty {
-                    continuation.yield(HTTPLineStream.decodeLine(buffer))
-                }
-                continuation.finish()
-            } catch is CancellationError {
-                idleWatchdog?.cancel()
-            } catch {
-                idleWatchdog?.cancel()
-                continuation.finish(throwing: error)
             }
         }
-        continuation.onTermination = { reason in
-            if case .cancelled = reason {
-                pump.cancel()
-            }
+        continuation.onTermination = { _ in
+            pumpBox.withLock { $0?.cancel() }
         }
         return (stream, httpResponse)
     }

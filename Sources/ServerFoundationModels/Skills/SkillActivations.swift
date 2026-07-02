@@ -2,6 +2,7 @@
 // apple/foundation-models-utilities, adapted to ServerFoundationModels.
 
 import Foundation
+import Synchronization
 
 /// A collection of active skill identifiers that tracks which skills have been
 /// activated during a language model session.
@@ -10,36 +11,31 @@ import Foundation
 /// for skill activation state. Iteration and ``snapshot()`` copy the active
 /// names under a single lock acquisition; concurrent mutations do not affect an
 /// iteration already in progress.
+///
+/// @unchecked Sendable invariant: `names` is guarded by `Mutex`.
 public final class SkillActivations: @unchecked Sendable {
-    private let lock = NSLock()
-    private var names: [String] = []
+    private let names = Mutex([String]())
 
     public init() {}
 
-    private func withLock<T>(_ body: () -> T) -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return body()
-    }
-
     public func activate(_ name: String) {
-        withLock {
-            guard !names.contains(name) else { return }
-            names.append(name)
+        names.withLock {
+            guard !$0.contains(name) else { return }
+            $0.append(name)
         }
     }
 
     public func deactivate(_ name: String) {
-        withLock { names.removeAll { $0 == name } }
+        names.withLock { $0.removeAll { $0 == name } }
     }
 
     public func contains(_ name: String) -> Bool {
-        withLock { names.contains(name) }
+        names.withLock { $0.contains(name) }
     }
 
     /// Returns a copy of the active skill names under a single lock acquisition.
     public func snapshot() -> [String] {
-        withLock { names }
+        names.withLock { $0 }
     }
 }
 

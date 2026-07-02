@@ -116,6 +116,8 @@ public struct UnknownSkillError: Error, CustomStringConvertible {
     }
 }
 
+/// @unchecked Sendable invariant: holds `SkillActivations` (Mutex-guarded) and
+/// a `@Sendable` callback; skill definitions are immutable after construction.
 private struct ToggleSkillTool: @unchecked Sendable, Tool {
     let name: String
     let description: String

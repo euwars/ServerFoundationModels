@@ -25,20 +25,20 @@ struct XAIServerToolsProbe {
             name: .grok4_3,
             auth: .apiKey(key),
             conversationState: state,
-            serverTools: XAILiveServerToolsScenario.serverTools,
-            timeout: XAILiveServerToolsScenario.timeout
+            serverTools: XAIServerToolsValidationScenario.serverTools,
+            timeout: XAIServerToolsValidationScenario.timeout
         )
         let session = LanguageModelSession(
             model: model,
-            instructions: XAILiveServerToolsScenario.instructions
+            instructions: XAIServerToolsValidationScenario.instructions
         )
 
         print("=== xAI server-tools probe: strict segment coverage ===")
-        print("tools: \(XAILiveServerToolsScenario.serverTools.map(\.wireType).sorted().joined(separator: ", "))")
-        print("prompts: \(XAILiveServerToolsScenario.prompts.count) steps (xAI docs + open-page)")
+        print("tools: \(XAIServerToolsValidationScenario.serverTools.map(\.wireType).sorted().joined(separator: ", "))")
+        print("prompts: \(XAIServerToolsValidationScenario.prompts.count) steps (xAI docs + open-page)")
 
         var lastText = ""
-        for (step, prompt) in XAILiveServerToolsScenario.prompts.enumerated() {
+        for (step, prompt) in XAIServerToolsValidationScenario.prompts.enumerated() {
             print("\n--- step \(step + 1) ---")
             print("prompt: \(prompt.prefix(120))")
             let response = try await session.respond(to: prompt)

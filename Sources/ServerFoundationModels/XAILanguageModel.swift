@@ -3,6 +3,7 @@
 
 import Foundation
 import Logging
+import Synchronization
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -265,10 +266,11 @@ public struct XAILanguageModel: Sendable, LanguageModel {
 
         private func warnIfInsecureHTTP(baseURL: URL, auth: XAIAuthMode, logger: Logger) {
             guard baseURL.scheme?.lowercased() == "http", authCarriesCredentials(auth) else { return }
-            XAIHTTPWarnings.lock.lock()
-            let shouldWarn = !XAIHTTPWarnings.didWarnInsecureHTTP
-            if shouldWarn { XAIHTTPWarnings.didWarnInsecureHTTP = true }
-            XAIHTTPWarnings.lock.unlock()
+            let shouldWarn = XAIHTTPWarnings.didWarnInsecureHTTP.withLock { warned in
+                let shouldWarn = !warned
+                warned = true
+                return shouldWarn
+            }
             if shouldWarn {
                 logger.warning("xAI base URL uses plain HTTP while auth carries credentials")
             }
@@ -306,6 +308,5 @@ public struct XAILanguageModel: Sendable, LanguageModel {
 }
 
 private enum XAIHTTPWarnings {
-    static let lock = NSLock()
-    static var didWarnInsecureHTTP = false
+    static let didWarnInsecureHTTP = Mutex(false)
 }

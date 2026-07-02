@@ -40,10 +40,22 @@ enum ParityModel {
 
     static let isAvailable: Bool = {
         if useChatCompletions {
-            var request = URLRequest(url: baseURL.appendingPathComponent("v1/models"))
-            request.timeoutInterval = 2
-            final class Flag: @unchecked Sendable { var value = false }
-            let flag = Flag()
+            return chatCompletionsReachable(
+                url: baseURL.appendingPathComponent("v1/models"),
+                timeout: 2
+            )
+        }
+        return SystemLanguageModel.default.isAvailable
+    }()
+
+    /// Synchronous reachability without blocking the Swift concurrency thread pool.
+    /// The URLSession callback runs on a dedicated `Thread` that is joined before return.
+    private static func chatCompletionsReachable(url: URL, timeout: TimeInterval) -> Bool {
+        final class Flag: @unchecked Sendable { var value = false }
+        let flag = Flag()
+        let thread = Thread {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = timeout
             let semaphore = DispatchSemaphore(value: 0)
             URLSession.shared.dataTask(with: request) { _, response, _ in
                 flag.value = (response as? HTTPURLResponse)?.statusCode == 200
@@ -62,10 +74,13 @@ enum ParityModel {
 
                 """, stderr)
             }
-            return flag.value
         }
-        return SystemLanguageModel.default.isAvailable
-    }()
+        thread.start()
+        while !thread.isFinished {
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        return flag.value
+    }
 }
 
 /// Selects the backend at runtime while presenting a single concrete
