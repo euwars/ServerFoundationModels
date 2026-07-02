@@ -621,9 +621,9 @@ struct SessionBehaviorTests {
         let signature = Data([0x01, 0x02, 0x03])
         let script = ScriptBox(rounds: [
             ScriptedRound(
+                textFragments: ["answer"],
                 reasoningFragments: ["thinking"],
-                reasoningSignature: signature,
-                textFragments: ["answer"]
+                reasoningSignature: signature
             ),
         ])
         let session = LanguageModelSession(model: ScriptedModel(script: script))
@@ -645,13 +645,13 @@ struct SessionBehaviorTests {
     func customSegmentSurvivesAttachmentRemoval() async throws {
         let script = ScriptBox(rounds: [
             ScriptedRound(
+                textFragments: ["done"],
                 responseEvents: [
                     .addAttachment(behaviorTestAttachment(id: "A")),
                     .updateCustom(BehaviorCustomSegment(id: "C", value: "initial")),
                     .removeAttachment(id: "A"),
                     .updateCustom(BehaviorCustomSegment(id: "C", value: "updated")),
-                ],
-                textFragments: ["done"]
+                ]
             ),
         ])
         let session = LanguageModelSession(model: ScriptedModel(script: script))

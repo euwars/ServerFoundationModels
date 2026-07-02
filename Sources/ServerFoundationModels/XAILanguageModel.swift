@@ -164,7 +164,7 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             var streamingBody = body
             streamingBody.stream = true
             urlRequest.httpBody = try streamingBody.bodyJSON()
-            validateAuth(auth)
+            try validateAuth(auth)
             warnIfInsecureHTTP(baseURL: baseURL, auth: auth, logger: logger)
 
             let (lines, response) = try await HTTPLineStream.connect(urlRequest)
@@ -233,7 +233,7 @@ public struct XAILanguageModel: Sendable, LanguageModel {
                 }
             }
 
-            return accumulator.finish()
+            return try accumulator.finish()
         }
 
         private func applyAuth(_ auth: XAIAuthMode, to request: inout URLRequest) {
@@ -247,19 +247,19 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             }
         }
 
-        private func validateAuth(_ auth: XAIAuthMode) {
+        private func validateAuth(_ auth: XAIAuthMode) throws {
             switch auth {
             case .apiKey(let key):
-                precondition(
-                    !key.contains("\n") && !key.contains("\r"),
-                    "API key must not contain newline characters"
-                )
+                if key.contains("\n") || key.contains("\r") {
+                    throw TransportConfigurationError("API key must not contain newline characters")
+                }
             case .proxied(let headers):
                 for (name, value) in headers {
-                    precondition(
-                        !value.contains("\n") && !value.contains("\r"),
-                        "header \(name) value must not contain newline characters"
-                    )
+                    if value.contains("\n") || value.contains("\r") {
+                        throw TransportConfigurationError(
+                            "header \(name) value must not contain newline characters"
+                        )
+                    }
                 }
             }
         }

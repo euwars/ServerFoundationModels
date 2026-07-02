@@ -127,7 +127,7 @@ func research(_ question: String, depth: Int, ctx: TreeContext) async -> String 
     func attempt() async throws -> String {
         let session = LanguageModelSession(
             model: XAILanguageModel(
-                name: depth <= 1 ? .grok4_3 : .grok4_1Fast,       // cheaper as you go deeper
+                name: .grok4_3,
                 auth: .apiKey(ctx.key),
                 serverTools: interior ? [] : [.webSearch, .xSearch]  // leaves search; interiors delegate
             ),
@@ -173,7 +173,7 @@ func research(_ question: String, depth: Int, ctx: TreeContext) async -> String 
 
 func verifyLeaf(_ findings: String, ctx: TreeContext) async throws -> Verdict {
     let v = LanguageModelSession(
-        model: XAILanguageModel(name: .grok4_1Fast, auth: .apiKey(ctx.key)),
+        model: XAILanguageModel(name: .grok4_3, auth: .apiKey(ctx.key)),
         instructions: "You are a careful fact-checker. Mark supported=false ONLY when a claim is clearly "
             + "self-contradictory, fabricated, or logically impossible. Do not penalize missing detail, "
             + "hedging, or unfamiliar-but-plausible facts."

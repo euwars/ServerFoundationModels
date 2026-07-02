@@ -297,7 +297,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     ) async throws -> Response<GeneratedContent> {
         try await respondStructured(
             to: prompt, schema: schema,
-            includeSchemaInPrompt: nil,
+            includeSchemaInPrompt: contextOptions.includeSchemaInPrompt ?? true,
             options: options, contextOptions: contextOptions, metadata: metadata
         )
     }
@@ -1116,12 +1116,6 @@ public final class LanguageModelSession: @unchecked Sendable {
             var attachmentSegmentIndices: [String: Int] = [:]
             var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
 
-            func mergeMetadata(_ values: [String: any Sendable & Codable & Equatable]) {
-                for (key, value) in values {
-                    responseMetadata[key] = value
-                }
-            }
-
             func upsertCustomSegment(_ segment: any Transcript.CustomSegment) {
                 if let index = customSegmentIndices[segment.id] {
                     responseSegments[index] = .custom(segment)
@@ -1193,7 +1187,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     case .removeAttachmentSegment(let id):
                         removeAttachmentSegment(id: id)
                     case .updateMetadata(let reported):
-                        mergeMetadata(reported.values)
+                        responseMetadata.merge(reported.values) { _, new in new }
                     }
                 case let reasoningEvent as LanguageModelExecutorGenerationChannel.Reasoning:
                     switch reasoningEvent.action {
@@ -1255,7 +1249,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             turnUsage.input.cachedTokenCount += usage.input.cachedTokenCount
             turnUsage.output.totalTokenCount += usage.output.totalTokenCount
             turnUsage.output.reasoningTokenCount += usage.output.reasoningTokenCount
-            Self.mergeMetadata(into: &turnUsage.metadata, from: responseMetadata)
+            turnUsage.metadata.merge(responseMetadata) { _, new in new }
             recordUsage(usage)
 
             // The model's thinking is part of the durable record, ahead of
@@ -1460,15 +1454,6 @@ public final class LanguageModelSession: @unchecked Sendable {
             inner = String(inner[contentStart...])
         }
         return inner.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func mergeMetadata(
-        into target: inout [String: any Sendable & Codable & Equatable],
-        from source: [String: any Sendable & Codable & Equatable]
-    ) {
-        for (key, value) in source {
-            target[key] = value
-        }
     }
 
     // MARK: Response types

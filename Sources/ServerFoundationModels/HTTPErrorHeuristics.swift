@@ -34,3 +34,15 @@ enum HTTPErrorHeuristics {
             && (lowered.contains("token") || lowered.contains("length") || lowered.contains("window"))
     }
 }
+
+/// A provider configuration is invalid in a way only detectable at request
+/// time (e.g. a credential or header value containing a newline, commonly a
+/// key file read without trimming). Thrown instead of trapping so servers
+/// can surface a recoverable error rather than crash.
+public struct TransportConfigurationError: Error, CustomDebugStringConvertible {
+    public let debugDescription: String
+
+    public init(_ description: String) {
+        self.debugDescription = description
+    }
+}

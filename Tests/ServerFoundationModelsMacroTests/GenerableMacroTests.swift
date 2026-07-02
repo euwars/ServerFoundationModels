@@ -967,7 +967,7 @@ final class GenerableMacroTests: XCTestCase {
                         type: Self.self,
                         description: nil,
                         properties: [
-                            GenerationSchema.Property(name: "scores", description: "a score", type: [Int].self, guides: [.range(0...100), .count(1...5)])
+                            GenerationSchema.Property(name: "scores", description: "a score", type: [Int].self, guides: [.range(0 ... 100), .count(1 ... 5)])
                         ]
                     )
                 }
@@ -1290,7 +1290,7 @@ final class GenerableMacroTests: XCTestCase {
             diagnostics: [
                 DiagnosticSpec(
                     message: "@Generable currently supports structs and enums",
-                    line: 2,
+                    line: 1,
                     column: 1
                 )
             ],
@@ -1314,7 +1314,7 @@ final class GenerableMacroTests: XCTestCase {
             diagnostics: [
                 DiagnosticSpec(
                     message: "@Generable currently supports structs and enums",
-                    line: 2,
+                    line: 1,
                     column: 1
                 )
             ],
@@ -1339,7 +1339,7 @@ final class GenerableMacroTests: XCTestCase {
                 DiagnosticSpec(
                     message: "@Generable enums with associated values are not supported yet",
                     line: 3,
-                    column: 5
+                    column: 10
                 )
             ],
             macros: macros
@@ -1514,8 +1514,6 @@ final class GenerableMacroTests: XCTestCase {
             """,
             expandedSource: """
             struct S {
-                @Guide(description: "first")
-                @Guide(description: "second")
                 var s: String
 
                 init(s: String) {

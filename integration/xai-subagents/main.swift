@@ -36,7 +36,7 @@ struct SpawnResearchSubagent: Tool {
         let n = log.record(arguments.task)
         print("  [spawn #\(n)] \(arguments.task.prefix(72))")
         let sub = LanguageModelSession(
-            model: XAILanguageModel(name: .grok4_1Fast, auth: .apiKey(key), serverTools: [.webSearch, .xSearch]),
+            model: XAILanguageModel(name: .grok4_3, auth: .apiKey(key), serverTools: [.webSearch, .xSearch]),
             instructions: "Research the sub-question with web/X search. Answer in 2-3 sentences with source URLs."
         )
         let r = try await sub.respond(to: arguments.task, contextOptions: ContextOptions(reasoningLevel: .light))

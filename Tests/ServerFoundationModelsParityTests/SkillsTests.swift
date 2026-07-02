@@ -63,7 +63,7 @@ import Testing
         #expect(activations.contains("style"))
         let second = try await toggle.call(GeneratedContent(properties: ["skill": "style"]))
         #expect(activations.contains("style"))
-        #expect(second.text.contains("cannot be deactivated"))
+        #expect(second.contains("cannot be deactivated"))
     }
 
     @Test func unknownSkillReturnsExplanatoryOutput() async throws {
@@ -72,8 +72,8 @@ import Testing
         }
         let toggle = try #require(AnyDynamicInstructions(skills).allInstructionTools.first)
         let out = try await toggle.call(GeneratedContent(properties: ["skill": "missing"]))
-        #expect(out.text.contains("missing"))
-        #expect(out.text.contains("known"))
+        #expect(out.contains("missing"))
+        #expect(out.contains("known"))
     }
 
     @Test func concurrentActivationAndIterationDoesNotCrash() async {

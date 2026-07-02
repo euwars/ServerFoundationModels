@@ -32,26 +32,32 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         return stripped
     }
 
+    private enum PartsResult {
+        case success(name: String, keyName: String, type: String, defaultValue: String, access: String)
+        case multipleBindings
+    }
+
     private static func parts(
         of declaration: some DeclSyntaxProtocol,
-        in context: some MacroExpansionContext
-    ) throws -> (name: String, keyName: String, type: String, defaultValue: String, access: String) {
+        in context: some MacroExpansionContext,
+        diagnoseMultipleBindings: Bool
+    ) throws -> PartsResult {
         guard let variable = declaration.as(VariableDeclSyntax.self) else {
             throw MacroError(
                 description: "@SessionPropertyEntry requires 'var name: Type = defaultValue'"
             )
         }
         if variable.bindings.count > 1 {
-            context.diagnose(Diagnostic(
-                node: Syntax(variable),
-                message: SessionPropertyDiagnostic(
-                    "@SessionPropertyEntry does not support multiple bindings in one declaration",
-                    id: "multipleBindings"
-                )
-            ))
-            throw MacroError(
-                description: "@SessionPropertyEntry does not support multiple bindings in one declaration"
-            )
+            if diagnoseMultipleBindings {
+                context.diagnose(Diagnostic(
+                    node: Syntax(variable),
+                    message: SessionPropertyDiagnostic(
+                        "@SessionPropertyEntry does not support multiple bindings in one declaration",
+                        id: "multipleBindings"
+                    )
+                ))
+            }
+            return .multipleBindings
         }
         guard let binding = variable.bindings.first,
             let pattern = binding.pattern.as(IdentifierPatternSyntax.self),
@@ -65,12 +71,12 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         let name = pattern.identifier.text
         // Mirror the property's access level: a `public` key struct on an
         // internal property (or internal containing type) would not compile.
-        return (
-            name,
-            stripBackticks(name),
-            type,
-            initializer,
-            GenerableMacro.accessModifier(in: variable.modifiers)
+        return .success(
+            name: name,
+            keyName: stripBackticks(name),
+            type: type,
+            defaultValue: initializer,
+            access: GenerableMacro.accessModifier(in: variable.modifiers)
         )
     }
 
@@ -79,11 +85,15 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         providingAccessorsOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [AccessorDeclSyntax] {
-        let (_, keyName, _, _, _) = try parts(of: declaration, in: context)
-        return [
-            "get { self[__Key_\(raw: keyName).self] }",
-            "set { self[__Key_\(raw: keyName).self] = newValue }",
-        ]
+        switch try parts(of: declaration, in: context, diagnoseMultipleBindings: true) {
+        case .multipleBindings:
+            return []
+        case .success(_, let keyName, _, _, _):
+            return [
+                "get { self[__Key_\(raw: keyName).self] }",
+                "set { self[__Key_\(raw: keyName).self] = newValue }",
+            ]
+        }
     }
 
     public static func expansion(
@@ -91,14 +101,18 @@ public struct SessionPropertyEntryMacro: AccessorMacro, PeerMacro {
         providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let (_, keyName, type, defaultValue, access) = try parts(of: declaration, in: context)
-        return [
-            """
-            \(raw: access)struct __Key_\(raw: keyName): SessionPropertyKey {
-                \(raw: access)static var defaultValue: \(raw: type) { \(raw: defaultValue) }
-            }
-            """
-        ]
+        switch try parts(of: declaration, in: context, diagnoseMultipleBindings: false) {
+        case .multipleBindings:
+            return []
+        case .success(_, let keyName, let type, let defaultValue, let access):
+            return [
+                """
+                \(raw: access)struct __Key_\(raw: keyName): SessionPropertyKey {
+                    \(raw: access)static var defaultValue: \(raw: type) { \(raw: defaultValue) }
+                }
+                """
+            ]
+        }
     }
 }
 

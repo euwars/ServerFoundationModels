@@ -63,7 +63,9 @@ enum ParityModel {
             }.resume()
             semaphore.wait()
             if flag.value {
-                fputs("""
+                // print (not fputs+stderr): the C stderr global is not
+                // concurrency-safe under Swift 6 on Linux.
+                print("""
 
                 ═══════════════════════════════════════════════════════════════════
                 PARITY LIVE MODEL DETECTED — behavioral suites ACTIVATED
@@ -72,7 +74,7 @@ enum ParityModel {
                 To opt out: unset PARITY_BACKEND, or stop the server at \(baseURL.absoluteString)
                 ═══════════════════════════════════════════════════════════════════
 
-                """, stderr)
+                """)
             }
         }
         thread.start()
@@ -117,7 +119,7 @@ struct ChatCompletionsOrSystem: LanguageModel {
                 let executor = try ChatCompletionsLanguageModel.Executor(configuration: chatConfiguration)
                 try await executor.respond(to: request, model: model.chat, streamingInto: channel)
             } else {
-                let executor = try SystemLanguageModel.Executor(configuration: .init())
+                let executor = SystemLanguageModel.Executor(configuration: .init())
                 try await executor.respond(to: request, model: .default, streamingInto: channel)
             }
         }

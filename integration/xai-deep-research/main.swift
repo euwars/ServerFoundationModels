@@ -89,7 +89,7 @@ struct DeepResearchProbe {
                     do {
                         // 2. Research: fast, wide, server-side search + citations.
                         let rStart = clock.now
-                        let rs = makeSession(.grok4_1Fast, [.webSearch, .xSearch],
+                        let rs = makeSession(.grok4_3, [.webSearch, .xSearch],
                                              "Research the question using web and X search. Answer concisely with citations.", key: key)
                         let r = try await rs.respond(to: angle, contextOptions: ContextOptions(reasoningLevel: .light))
                         let sources = XAIServerToolSegmentCollector.segments(in: rs.transcript).flatMap {

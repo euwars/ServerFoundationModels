@@ -17,6 +17,7 @@ enum XAIResponseStream {
         private(set) var toolCalls: [(id: String, name: String, arguments: String)] = []
         private(set) var usage: LanguageModelExecutorGenerationChannel.Usage?
         private(set) var isTerminal = false
+        private(set) var malformedFrameCount = 0
 
         private var outputIndexByItemID: [String: Int] = [:]
         private var searchSegmentIDs: [String] = []
@@ -31,8 +32,14 @@ enum XAIResponseStream {
                 return finalizePending()
             }
 
-            guard let event = try? JSONNode.parse(trimmed) else { return [] }
-            guard case .string(let type) = event["type"] else { return [] }
+            guard let event = try? JSONNode.parse(trimmed) else {
+                malformedFrameCount += 1
+                return []
+            }
+            guard case .string(let type) = event["type"] else {
+                malformedFrameCount += 1
+                return []
+            }
 
             switch type {
             case "error":
@@ -116,7 +123,13 @@ enum XAIResponseStream {
             }
         }
 
-        func finish() -> XAIResponseTranslator.Parsed {
+        func finish() throws -> XAIResponseTranslator.Parsed {
+            if !isTerminal, malformedFrameCount > 0 {
+                throw LanguageModelTransportError(
+                    statusCode: 0,
+                    message: "stream contained \(malformedFrameCount) unparseable frames and no terminal event"
+                )
+            }
             let orderedEvents = XAIServerToolWire.orderedEvents(
                 from: outputItems,
                 topLevelCitations: topLevelCitations

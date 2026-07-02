@@ -83,7 +83,7 @@ import Testing
                 break
             }
         }
-        try await task.value
+        await task.value
 
         #expect(customSegments.count == 1)
         #expect(customSegments[0].toolName == "web_search")

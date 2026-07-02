@@ -33,7 +33,7 @@ import Testing
         _ = try accumulator.ingest(payload: delta)
         let final = try accumulator.ingest(payload: completed)
 
-        let parsed = accumulator.finish()
+        let parsed = try accumulator.finish()
         #expect(parsed.responseId == "resp_stream")
         #expect(parsed.text == "xAI is an AI company.")
         #expect(final.contains { action in
@@ -109,6 +109,31 @@ import Testing
         #expect(delta.count == 1)
     }
 
+    @Test func finishThrowsWhenOnlyMalformedFrames() throws {
+        var acc = XAIResponseStream.Accumulator()
+        _ = try acc.ingest(payload: "<html><body>502 Bad Gateway</body></html>")
+        _ = try acc.ingest(payload: "not valid json{{{")
+        do {
+            _ = try acc.finish()
+            Issue.record("expected transport error for malformed-only stream")
+        } catch let error as LanguageModelTransportError {
+            #expect(error.statusCode == 0)
+            #expect(error.message.contains("2 unparseable frames"))
+        } catch {
+            Issue.record("expected LanguageModelTransportError, got \(error)")
+        }
+    }
+
+    @Test func finishSucceedsWithMalformedFrameAndTerminal() throws {
+        var acc = XAIResponseStream.Accumulator()
+        _ = try acc.ingest(payload: ": keep-alive")
+        _ = try acc.ingest(payload: """
+        {"type":"response.completed","response":{"id":"r1","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}
+        """)
+        let parsed = try acc.finish()
+        #expect(parsed.responseId == "r1")
+    }
+
     @Test func streamRateLimitMapsToTypedError() throws {
         var acc = XAIResponseStream.Accumulator()
         do {
@@ -117,7 +142,33 @@ import Testing
         } catch let error as LanguageModelError {
             guard case .rateLimited = error else {
                 Issue.record("expected rateLimited, got \(error)")
+                return
             }
+        }
+    }
+
+    @Test func streamStringRateLimitCodeMapsToTypedError() throws {
+        var acc = XAIResponseStream.Accumulator()
+        do {
+            _ = try acc.ingest(payload: #"{"type":"error","code":"rate_limit_exceeded","message":"rate limited"}"#)
+            Issue.record("expected rateLimited error")
+        } catch let error as LanguageModelError {
+            guard case .rateLimited = error else {
+                Issue.record("expected rateLimited, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func contentModeratedStringCodeDoesNotMapToRateLimit() throws {
+        var acc = XAIResponseStream.Accumulator()
+        do {
+            _ = try acc.ingest(payload: #"{"type":"error","code":"content_moderated","message":"blocked"}"#)
+            Issue.record("expected transport error")
+        } catch let error as LanguageModelTransportError {
+            #expect(error.statusCode == 0)
+        } catch {
+            Issue.record("expected LanguageModelTransportError, got \(error)")
         }
     }
 
@@ -131,6 +182,7 @@ import Testing
         } catch let error as LanguageModelError {
             guard case .contextSizeExceeded = error else {
                 Issue.record("expected contextSizeExceeded, got \(error)")
+                return
             }
         }
     }

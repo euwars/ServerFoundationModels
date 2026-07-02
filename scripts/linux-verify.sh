@@ -22,8 +22,9 @@ echo "=== Parallel jobs: $SWIFT_JOBS (override with SWIFT_BUILD_JOBS) ==="
 
 pass() { echo "OK: $1"; }
 
-XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAIResponseStreamTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests|XAILiveServerToolsValidationTests|XAIServerToolTranscriptCodableTests|SkillsTests'
-PARITY_FILTER='APIParityScenarios|DifferentialParityScenarios|WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
+# XAI-focused subset for the quick loop; full runs execute the whole offline
+# suite (live suites self-gate on model availability / XAI_API_KEY).
+XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAIResponseStreamTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests|XAIServerToolsValidationTests|XAIServerToolTranscriptCodableTests|SkillsTests'
 
 if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then
   echo "--- QUICK: debug build + XAI unit tests ---"
@@ -46,17 +47,13 @@ echo "--- build XAILiveProbe (release) ---"
 swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --product XAILiveProbe
 pass "XAILiveProbe release build"
 
-echo "--- XAI unit tests ---"
-swift test -c release "${SWIFT_TEST_FLAGS[@]}" --filter "$XAI_FILTER"
-pass "XAI unit tests"
+echo "--- full offline suite (live suites self-gate) ---"
+swift test -c release "${SWIFT_TEST_FLAGS[@]}"
+pass "offline test suite"
 
 echo "--- build library (URLSession transport, traits disabled) ---"
 swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --disable-default-traits
 pass "release build (URLSession / no AsyncHTTPClient)"
-
-echo "--- core parity subset (model-free) ---"
-swift test -c release "${SWIFT_TEST_FLAGS[@]}" --filter "$PARITY_FILTER"
-pass "parity subset tests"
 
 if [[ -n "${XAI_API_KEY:-}" ]]; then
   echo "--- live xAI probe (grok-4.3 chaining + prompt cache) ---"

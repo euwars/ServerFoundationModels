@@ -101,9 +101,12 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
             if !(200..<300).contains(response.statusCode) {
                 var bodyLines: [String] = []
+                var bodyByteCount = 0
                 for try await line in lines {
                     bodyLines.append(line)
-                    if bodyLines.joined(separator: "\n").count > 4096 { break }
+                    bodyByteCount += line.utf8.count
+                    if bodyLines.count > 1 { bodyByteCount += 1 }
+                    if bodyByteCount > 4096 { break }
                 }
                 let body = bodyLines.joined(separator: "\n")
                 logger.warning("chat.completions error response", metadata: [
@@ -305,10 +308,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             for (header, value) in configuration.additionalHeaders {
-                precondition(
-                    !value.contains(where: { $0 == "\n" || $0 == "\r" }),
-                    "additionalHeaders values must not contain newline characters"
-                )
+                if value.contains(where: { $0 == "\n" || $0 == "\r" }) {
+                    throw TransportConfigurationError(
+                        "additionalHeaders values must not contain newline characters"
+                    )
+                }
                 urlRequest.setValue(value, forHTTPHeaderField: header)
             }
             let bodyNode = makeBody(for: request)
@@ -778,6 +782,20 @@ enum PooledHTTPClient {
     }()
 }
 
+/// Activity epoch for the AsyncHTTPClient body idle watchdog. A class wrapper
+/// so closures capture a Sendable reference, not a bare `Mutex` value.
+private final class StreamActivity: @unchecked Sendable {
+    private let epochLock = Mutex<UInt64>(0)
+
+    func bump() {
+        epochLock.withLock { $0 += 1 }
+    }
+
+    func epoch() -> UInt64 {
+        epochLock.withLock { $0 }
+    }
+}
+
 extension HTTPLineStream {
     /// NIO-based transport: pooled connections, concurrent-safe streaming.
     static func connectViaAsyncHTTPClient(
@@ -805,7 +823,7 @@ extension HTTPLineStream {
         // URLRequest.timeoutInterval is an idle (between-bytes) timeout on
         // URLSession. AsyncHTTPClient's execute `timeout` is a total deadline,
         // so confine it to connect + response headers; body bytes are guarded
-        // by a per-chunk idle watchdog below.
+        // by a long-lived idle watchdog below.
         let idleTimeout = request.timeoutInterval
         let idleNanos = UInt64((idleTimeout * 1_000_000_000).rounded())
         let headDeadline = TimeAmount.milliseconds(Int64((idleTimeout * 1000).rounded()))
@@ -817,59 +835,57 @@ extension HTTPLineStream {
             throw LanguageModelTransportError(statusCode: 0, message: "could not form response")
         }
 
+        let activity = StreamActivity()
         let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
-        let pumpBox = Mutex<Task<Void, any Error>?>(nil)
-        pumpBox.withLock { box in
-            box = Task {
-                var buffer = Data()
-                var idleWatchdog: Task<Void, Never>?
-                defer { idleWatchdog?.cancel() }
+        let idleWatchdog = Task<Void, Never> {
+            var lastEpoch = activity.epoch()
+            // Timeout precision is [idle, 2*idle): detected on the first wake
+            // where no chunk arrived since the previous wake.
+            while true {
+                try? await Task.sleep(nanoseconds: idleNanos)
+                if Task.isCancelled { return }
+                let current = activity.epoch()
+                if current == lastEpoch {
+                    continuation.finish(throwing: URLError(.timedOut))
+                    return
+                }
+                lastEpoch = current
+            }
+        }
+        let pump = Task<Void, any Error> {
+            defer { idleWatchdog.cancel() }
+            var buffer = Data()
 
-                func armIdleWatchdog() {
-                    idleWatchdog?.cancel()
-                    idleWatchdog = Task {
-                        try? await Task.sleep(nanoseconds: idleNanos)
-                        guard !Task.isCancelled else { return }
-                        pumpBox.withLock { $0?.cancel() }
-                        continuation.finish(throwing: URLError(.timedOut))
+            do {
+                for try await chunk in response.body {
+                    activity.bump()
+                    try Task.checkCancellation()
+                    buffer.append(contentsOf: chunk.readableBytesView)
+                    // Advance a cursor over the buffered bytes and compact the
+                    // consumed prefix once per chunk. Removing each line from the
+                    // front instead would re-shift the tail per line — O(n²) over
+                    // a chunk with many lines.
+                    var lineStart = buffer.startIndex
+                    while let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
+                        continuation.yield(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
+                        lineStart = buffer.index(after: newline)
+                    }
+                    if lineStart != buffer.startIndex {
+                        buffer.removeSubrange(buffer.startIndex..<lineStart)
                     }
                 }
-
-                do {
-                    armIdleWatchdog()
-                    for try await chunk in response.body {
-                        idleWatchdog?.cancel()
-                        try Task.checkCancellation()
-                        buffer.append(contentsOf: chunk.readableBytesView)
-                        // Advance a cursor over the buffered bytes and compact the
-                        // consumed prefix once per chunk. Removing each line from the
-                        // front instead would re-shift the tail per line — O(n²) over
-                        // a chunk with many lines.
-                        var lineStart = buffer.startIndex
-                        while let newline = buffer[lineStart...].firstIndex(of: 0x0A) {
-                            continuation.yield(HTTPLineStream.decodeLine(buffer[lineStart..<newline]))
-                            lineStart = buffer.index(after: newline)
-                        }
-                        if lineStart != buffer.startIndex {
-                            buffer.removeSubrange(buffer.startIndex..<lineStart)
-                        }
-                        armIdleWatchdog()
-                    }
-                    idleWatchdog?.cancel()
-                    if !buffer.isEmpty {
-                        continuation.yield(HTTPLineStream.decodeLine(buffer))
-                    }
-                    continuation.finish()
-                } catch is CancellationError {
-                    idleWatchdog?.cancel()
-                } catch {
-                    idleWatchdog?.cancel()
-                    continuation.finish(throwing: error)
+                if !buffer.isEmpty {
+                    continuation.yield(HTTPLineStream.decodeLine(buffer))
                 }
+                continuation.finish()
+            } catch is CancellationError {
+                continuation.finish(throwing: CancellationError())
+            } catch {
+                continuation.finish(throwing: error)
             }
         }
         continuation.onTermination = { _ in
-            pumpBox.withLock { $0?.cancel() }
+            pump.cancel()
         }
         return (stream, httpResponse)
     }

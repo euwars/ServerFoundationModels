@@ -115,6 +115,13 @@ struct RecordingLogHandler: LogHandler {
         set { metadata[key] = newValue }
     }
 
+    func log(event: LogEvent) {
+        log(
+            level: event.level, message: event.message, metadata: event.metadata,
+            source: event.source, file: event.file, function: event.function, line: event.line
+        )
+    }
+
     func log(
         level: Logger.Level, message: Logger.Message, metadata: Logger.Metadata?,
         source: String, file: String, function: String, line: UInt
