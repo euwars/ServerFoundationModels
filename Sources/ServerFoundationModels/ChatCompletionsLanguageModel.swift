@@ -24,6 +24,15 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// Whether the endpoint supports `response_format` for structured output.
     public var supportsGuidedGeneration: Bool
 
+    /// Provider-executed server tools (e.g. `openrouter:web_search`) injected
+    /// verbatim into each request's `tools` array.
+    public var serverTools: [ChatCompletionsServerTool]
+
+    /// When false, requests are sent non-streaming (a single JSON response).
+    /// Some providers are more reliable non-streaming for structured output
+    /// combined with server tools.
+    public var stream: Bool
+
     /// Per-request timeout, in seconds.
     public var timeout: TimeInterval
 
@@ -38,12 +47,16 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         url: URL,
         additionalHeaders: [String: String] = [:],
         supportsGuidedGeneration: Bool = true,
+        serverTools: [ChatCompletionsServerTool] = [],
+        stream: Bool = true,
         timeout: TimeInterval = 600
     ) {
         self.name = name
         self.url = url
         self.additionalHeaders = additionalHeaders
         self.supportsGuidedGeneration = supportsGuidedGeneration
+        self.serverTools = serverTools
+        self.stream = stream
         self.timeout = timeout
     }
 
@@ -60,6 +73,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             url: url,
             additionalHeaders: additionalHeaders,
             supportsGuidedGeneration: supportsGuidedGeneration,
+            serverTools: serverTools,
+            stream: stream,
             timeout: timeout
         )
     }
@@ -72,6 +87,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             var url: URL
             var additionalHeaders: [String: String]
             var supportsGuidedGeneration: Bool
+            var serverTools: [ChatCompletionsServerTool] = []
+            var stream: Bool = true
             var timeout: TimeInterval = 600
         }
 
@@ -126,8 +143,16 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 throw LanguageModelTransportError(statusCode: response.statusCode, message: body)
             }
 
+            // Non-streaming: read the whole JSON body and emit once.
+            if !configuration.stream {
+                try await respondNonStreaming(lines: lines, channel: channel, logger: logger)
+                return
+            }
+
             // Accumulates streamed tool-call fragments by choice index.
             var toolCalls = ToolCallAccumulator()
+            // Accumulates url_citation annotations (e.g. from server web search).
+            var citations: [WebCitationSegment.Citation] = []
             // SSE event assembly: consecutive `data:` lines belong to one
             // event and are joined with "\n"; a blank line dispatches it.
             var pendingData: [String] = []
@@ -144,7 +169,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     guard !pendingData.isEmpty else { continue }
                     let payload = pendingData.joined(separator: "\n")
                     pendingData.removeAll()
-                    if try await processEvent(payload, toolCalls: &toolCalls, channel: channel, logger: logger) {
+                    if try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger) {
                         break
                     }
                     continue
@@ -158,7 +183,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             // anyway so providers that omit the trailing blank line still work.
             if !pendingData.isEmpty {
                 let payload = pendingData.joined(separator: "\n")
-                _ = try await processEvent(payload, toolCalls: &toolCalls, channel: channel, logger: logger)
+                _ = try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger)
             }
 
             for index in toolCalls.calls.keys.sorted() {
@@ -169,6 +194,86 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     action: .appendArguments(call.arguments, tokenCount: 0)
                 )))
             }
+
+            // Surface any web-search citations as a custom transcript segment.
+            if !citations.isEmpty {
+                var seen = Set<String>()
+                let unique = citations.filter { seen.insert($0.url.absoluteString).inserted }
+                await channel.send(.response(action: .updateCustomSegment(
+                    WebCitationSegment(id: UUID().uuidString, citations: unique)
+                )))
+            }
+        }
+
+        /// Reads a complete (non-streamed) chat-completions JSON body and emits
+        /// its content, reasoning, tool calls, usage, and citations at once.
+        private func respondNonStreaming(
+            lines: AsyncThrowingStream<String, any Error>,
+            channel: LanguageModelExecutorGenerationChannel,
+            logger: Logger
+        ) async throws {
+            var body = ""
+            for try await line in lines { body += line + "\n" }
+            guard let chunk = try? JSONNode.parse(body) else {
+                throw LanguageModelTransportError(
+                    statusCode: 200,
+                    message: "unparseable non-streaming response: \(String(body.prefix(256)))"
+                )
+            }
+
+            let message = chunk["choices"]?[0]?["message"]
+            if case .string(let content)? = message?["content"], !content.isEmpty {
+                await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+            }
+            for reasoningKey in ["reasoning", "reasoning_content"] {
+                if case .string(let reasoning)? = message?[reasoningKey], !reasoning.isEmpty {
+                    await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
+                }
+            }
+            if let usage = chunk["usage"], case .object = usage {
+                func intValue(_ node: JSONNode?) -> Int {
+                    if case .integer(let value) = node { return value }
+                    if case .number(let value) = node, let exact = Int(exactly: value) { return exact }
+                    return 0
+                }
+                await channel.send(.response(action: .updateUsage(
+                    input: .init(
+                        totalTokenCount: intValue(usage["prompt_tokens"]),
+                        cachedTokenCount: intValue(usage["prompt_tokens_details"]?["cached_tokens"])
+                    ),
+                    output: .init(
+                        totalTokenCount: intValue(usage["completion_tokens"]),
+                        reasoningTokenCount: intValue(usage["completion_tokens_details"]?["reasoning_tokens"])
+                    )
+                )))
+            }
+            if case .array(let calls)? = message?["tool_calls"] {
+                var accumulator = ToolCallAccumulator()
+                accumulator.ingest(calls)
+                for index in accumulator.calls.keys.sorted() {
+                    let call = accumulator.calls[index]!
+                    await channel.send(.toolCalls(action: .toolCall(
+                        id: call.id.isEmpty ? UUID().uuidString : call.id,
+                        name: call.name,
+                        action: .appendArguments(call.arguments, tokenCount: 0)
+                    )))
+                }
+            }
+            var citations: [WebCitationSegment.Citation] = []
+            Self.collectCitations(from: message?["annotations"], into: &citations)
+            if !citations.isEmpty {
+                var seen = Set<String>()
+                let unique = citations.filter { seen.insert($0.url.absoluteString).inserted }
+                await channel.send(.response(action: .updateCustomSegment(
+                    WebCitationSegment(id: UUID().uuidString, citations: unique)
+                )))
+            }
+            if case .string(let finishReason)? = chunk["choices"]?[0]?["finish_reason"],
+                finishReason == "content_filter" {
+                throw LanguageModelError.guardrailViolation(.init(
+                    debugDescription: "provider stopped generation with finish_reason=content_filter"
+                ))
+            }
         }
 
         /// Handles one assembled SSE event payload. Returns `true` when the
@@ -176,6 +281,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         private func processEvent(
             _ payload: String,
             toolCalls: inout ToolCallAccumulator,
+            citations: inout [WebCitationSegment.Citation],
             channel: LanguageModelExecutorGenerationChannel,
             logger: Logger
         ) async throws -> Bool {
@@ -221,6 +327,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             if case .array(let calls) = delta?["tool_calls"] {
                 toolCalls.ingest(calls)
             }
+            // Citations arrive as `url_citation` annotations, either streamed on
+            // the delta or attached to a full message.
+            Self.collectCitations(from: delta?["annotations"], into: &citations)
+            Self.collectCitations(from: choice?["message"]?["annotations"], into: &citations)
             if case .string(let finishReason) = choice?["finish_reason"] {
                 switch finishReason {
                 case "content_filter":
@@ -238,6 +348,34 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 }
             }
             return false
+        }
+
+        /// Parses `url_citation` annotations from an annotations array node into
+        /// accumulated citations. Handles both the nested
+        /// `{ "type":"url_citation", "url_citation": {...} }` shape and a flat
+        /// `{ "url":..., "title":... }`.
+        static func collectCitations(
+            from node: JSONNode?,
+            into citations: inout [WebCitationSegment.Citation]
+        ) {
+            guard case .array(let annotations)? = node else { return }
+            func intValue(_ node: JSONNode?) -> Int? {
+                if case .integer(let value)? = node { return value }
+                return nil
+            }
+            for annotation in annotations {
+                if case .string(let type)? = annotation["type"], type != "url_citation" { continue }
+                let source = annotation["url_citation"] ?? annotation
+                guard case .string(let urlString)? = source["url"],
+                    let url = URL(string: urlString) else { continue }
+                let title: String?
+                if case .string(let value)? = source["title"] { title = value } else { title = nil }
+                citations.append(.init(
+                    url: url, title: title,
+                    startIndex: intValue(source["start_index"]),
+                    endIndex: intValue(source["end_index"])
+                ))
+            }
         }
 
         /// Merges streamed tool-call delta fragments into complete calls.
@@ -306,7 +444,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             urlRequest.timeoutInterval = configuration.timeout
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            urlRequest.setValue(
+                configuration.stream ? "text/event-stream" : "application/json",
+                forHTTPHeaderField: "Accept"
+            )
             for (header, value) in configuration.additionalHeaders {
                 if value.contains(where: { $0 == "\n" || $0 == "\r" }) {
                     throw TransportConfigurationError(
@@ -345,12 +486,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         func makeBody(for request: LanguageModelExecutorGenerationRequest) -> JSONNode {
             var members: [JSONNode.Member] = [
                 .init(key: "model", value: .string(configuration.modelName)),
-                .init(key: "stream", value: .bool(true)),
-                .init(key: "stream_options", value: .object([
-                    .init(key: "include_usage", value: .bool(true))
-                ])),
-                .init(key: "messages", value: .array(makeMessages(from: request.transcript))),
             ]
+            if configuration.stream {
+                members.append(.init(key: "stream", value: .bool(true)))
+                members.append(.init(key: "stream_options", value: .object([
+                    .init(key: "include_usage", value: .bool(true))
+                ])))
+            }
+            members.append(.init(key: "messages", value: .array(makeMessages(from: request.transcript))))
 
             if let reasoningLevel = request.contextOptions.reasoningLevel {
                 let effort: String
@@ -391,17 +534,24 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 }
             }
 
-            if !request.enabledToolDefinitions.isEmpty {
-                let tools = request.enabledToolDefinitions.map { definition in
-                    JSONNode.object([
-                        .init(key: "type", value: .string("function")),
-                        .init(key: "function", value: .object([
-                            .init(key: "name", value: .string(definition.name)),
-                            .init(key: "description", value: .string(definition.description)),
-                            .init(key: "parameters", value: definition.parameters.jsonSchemaDocument),
-                        ])),
-                    ])
+            var tools: [JSONNode] = request.enabledToolDefinitions.map { definition in
+                JSONNode.object([
+                    .init(key: "type", value: .string("function")),
+                    .init(key: "function", value: .object([
+                        .init(key: "name", value: .string(definition.name)),
+                        .init(key: "description", value: .string(definition.description)),
+                        .init(key: "parameters", value: definition.parameters.jsonSchemaDocument),
+                    ])),
+                ])
+            }
+            // Provider-executed server tools (e.g. openrouter:web_search) are
+            // passed through verbatim alongside any function tools.
+            for serverTool in configuration.serverTools {
+                if let node = try? JSONNode.parse(serverTool.json) {
+                    tools.append(node)
                 }
+            }
+            if !tools.isEmpty {
                 members.append(.init(key: "tools", value: .array(tools)))
             }
             if let toolCallingMode = options.toolCallingMode {
