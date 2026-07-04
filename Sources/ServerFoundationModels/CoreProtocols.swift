@@ -34,6 +34,18 @@ extension Generable {
     }
 }
 
+/// The partial-generation view of a `Generable` type, spelled as a plain
+/// generic alias so it resolves through *this* module's `Generable`.
+///
+/// `@Generable`-expanded code refers to a property's streaming counterpart with
+/// `PartiallyGeneratedOf<X>` instead of `X.PartiallyGenerated`. The two are
+/// identical, but on platforms where Apple's FoundationModels is also in scope,
+/// the bare `X.PartiallyGenerated` member lookup is ambiguous across the two
+/// `Generable` protocols and the compiler warns. Because this alias is declared
+/// here, its `Generable` constraint is unambiguously ours, pinning the associated
+/// type to this module's conformance.
+public typealias PartiallyGeneratedOf<T: Generable> = T.PartiallyGenerated
+
 extension ConvertibleToGeneratedContent {
     public var promptRepresentation: Prompt {
         Prompt(text: generatedContent.jsonString)

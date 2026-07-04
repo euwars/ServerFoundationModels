@@ -59,11 +59,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 public struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     public var id: GenerationID
-                    public var name: String.PartiallyGenerated?
+                    public var name: PartiallyGeneratedOf<String>?
 
                     public init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                        self.name = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "name") ?? nil
                     }
                 }
             }
@@ -116,13 +116,13 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var a: Int.PartiallyGenerated?
-                    var b: Int.PartiallyGenerated?
+                    var a: PartiallyGeneratedOf<Int>?
+                    var b: PartiallyGeneratedOf<Int>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.a = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "a") ?? nil
-                        self.b = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "b") ?? nil
+                        self.a = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "a") ?? nil
+                        self.b = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "b") ?? nil
                     }
                 }
             }
@@ -233,11 +233,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var count: Int.PartiallyGenerated?
+                    var count: PartiallyGeneratedOf<Int>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.count = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "count") ?? nil
+                        self.count = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "count") ?? nil
                     }
                 }
             }
@@ -286,11 +286,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var v: Int.PartiallyGenerated?
+                    var v: PartiallyGeneratedOf<Int>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.v = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "v") ?? nil
+                        self.v = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "v") ?? nil
                     }
                 }
             }
@@ -340,11 +340,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var s: String.PartiallyGenerated?
+                    var s: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.s = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "s") ?? nil
+                        self.s = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "s") ?? nil
                     }
                 }
             }
@@ -392,11 +392,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var s: String.PartiallyGenerated?
+                    var s: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.s = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "s") ?? nil
+                        self.s = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "s") ?? nil
                     }
                 }
             }
@@ -444,11 +444,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var year: String.PartiallyGenerated?
+                    var year: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.year = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "year") ?? nil
+                        self.year = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "year") ?? nil
                     }
                 }
             }
@@ -549,11 +549,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var `class`: String.PartiallyGenerated?
+                    var `class`: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.`class` = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "class") ?? nil
+                        self.`class` = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "class") ?? nil
                     }
                 }
             }
@@ -604,11 +604,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var s: String.PartiallyGenerated?
+                    var s: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.s = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "s") ?? nil
+                        self.s = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "s") ?? nil
                     }
                 }
             }
@@ -719,11 +719,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var name: String.PartiallyGenerated?
+                    var name: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                        self.name = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "name") ?? nil
                     }
                 }
             }
@@ -770,11 +770,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var name: String.PartiallyGenerated?
+                    var name: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                        self.name = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "name") ?? nil
                     }
                 }
             }
@@ -823,11 +823,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var items: [Inner.PartiallyGenerated]?
+                    var items: [PartiallyGeneratedOf<Inner>]?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.items = try? generatedContent.value(Optional<[Inner.PartiallyGenerated]>.self, forProperty: "items") ?? nil
+                        self.items = try? generatedContent.value(Optional<[PartiallyGeneratedOf<Inner>]>.self, forProperty: "items") ?? nil
                     }
                 }
             }
@@ -876,11 +876,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var name: String.PartiallyGenerated?
+                    var name: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
+                        self.name = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "name") ?? nil
                     }
                 }
             }
@@ -974,11 +974,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var scores: [Int.PartiallyGenerated]?
+                    var scores: [PartiallyGeneratedOf<Int>]?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.scores = try? generatedContent.value(Optional<[Int.PartiallyGenerated]>.self, forProperty: "scores") ?? nil
+                        self.scores = try? generatedContent.value(Optional<[PartiallyGeneratedOf<Int>]>.self, forProperty: "scores") ?? nil
                     }
                 }
             }
@@ -1028,11 +1028,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var code: String.PartiallyGenerated?
+                    var code: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.code = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "code") ?? nil
+                        self.code = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "code") ?? nil
                     }
                 }
             }
@@ -1087,13 +1087,13 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var name: String.PartiallyGenerated?
-                    var age: Int.PartiallyGenerated?
+                    var name: PartiallyGeneratedOf<String>?
+                    var age: PartiallyGeneratedOf<Int>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.name = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "name") ?? nil
-                        self.age = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "age") ?? nil
+                        self.name = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "name") ?? nil
+                        self.age = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "age") ?? nil
                     }
                 }
             }
@@ -1142,11 +1142,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 package struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     package var id: GenerationID
-                    package var v: Int.PartiallyGenerated?
+                    package var v: PartiallyGeneratedOf<Int>?
 
                     package init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.v = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "v") ?? nil
+                        self.v = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "v") ?? nil
                     }
                 }
             }
@@ -1257,13 +1257,13 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var x: Int.PartiallyGenerated?
-                    var y: String.PartiallyGenerated?
+                    var x: PartiallyGeneratedOf<Int>?
+                    var y: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.x = try? generatedContent.value(Optional<Int.PartiallyGenerated>.self, forProperty: "x") ?? nil
-                        self.y = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "y") ?? nil
+                        self.x = try? generatedContent.value(Optional<PartiallyGeneratedOf<Int>>.self, forProperty: "x") ?? nil
+                        self.y = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "y") ?? nil
                     }
                 }
             }
@@ -1542,11 +1542,11 @@ final class GenerableMacroTests: XCTestCase {
 
                 struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
                     var id: GenerationID
-                    var s: String.PartiallyGenerated?
+                    var s: PartiallyGeneratedOf<String>?
 
                     init(_ generatedContent: GeneratedContent) throws {
                         self.id = generatedContent.id ?? GenerationID()
-                        self.s = try? generatedContent.value(Optional<String.PartiallyGenerated>.self, forProperty: "s") ?? nil
+                        self.s = try? generatedContent.value(Optional<PartiallyGeneratedOf<String>>.self, forProperty: "s") ?? nil
                     }
                 }
             }

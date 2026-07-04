@@ -35,8 +35,13 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         var defaultValue: String?
 
         /// The streaming-partial counterpart of the base type, with array
-        /// sugar translated structurally ([X] -> [X.PartiallyGenerated]) to
+        /// sugar translated structurally ([X] -> [PartiallyGeneratedOf<X>]) to
         /// avoid member-type lookup on sugared array types.
+        ///
+        /// The leaf uses `PartiallyGeneratedOf<X>` rather than `X.PartiallyGenerated`
+        /// so the reference resolves through this module's `Generable`. On platforms
+        /// where Apple's FoundationModels is also present, the bare `X.PartiallyGenerated`
+        /// member lookup is ambiguous and warns; the alias pins it to our conformance.
         var partialType: String {
             func translate(_ type: String) -> String {
                 let trimmed = type.trimmingCharacters(in: .whitespaces)
@@ -52,7 +57,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                     let inner = String(trimmed.dropFirst().dropLast())
                     return "[\(translate(inner))]"
                 }
-                return "\(trimmed).PartiallyGenerated"
+                return "PartiallyGeneratedOf<\(trimmed)>"
             }
             return translate(baseType)
         }
