@@ -420,12 +420,56 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     .init(key: "json_schema", value: .object([
                         .init(key: "name", value: .string("response")),
                         .init(key: "strict", value: .bool(true)),
-                        .init(key: "schema", value: schema.jsonSchemaDocument),
+                        .init(key: "schema", value: strictSchemaCompatible(schema.jsonSchemaDocument)),
                     ])),
                 ])))
             }
 
             return .object(members)
+        }
+
+        // Strict structured-output endpoints (OpenAI, Anthropic) reject
+        // value-constraint keywords in response schemas. Dropping them silently
+        // would lose authored intent — each folds into the description the
+        // model reads instead. Only response_format is sanitized; tool
+        // parameter schemas are not validated strictly by these endpoints.
+        func strictSchemaCompatible(_ node: JSONNode) -> JSONNode {
+            switch node {
+            case .array(let items):
+                return .array(items.map(strictSchemaCompatible))
+            case .object(let members):
+                let constraintKeys = [
+                    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+                    "multipleOf", "minItems", "maxItems", "minLength", "maxLength",
+                ]
+                var folded: [String] = []
+                var kept: [JSONNode.Member] = []
+                for member in members {
+                    let scalar: String? = switch member.value {
+                    case .integer(let i): String(i)
+                    case .number(let d): d == d.rounded() ? String(Int(d)) : String(d)
+                    default: nil
+                    }
+                    // Only scalar-valued matches are schema keywords; an object
+                    // under the same key is a property that shares the name.
+                    if let scalar, constraintKeys.contains(member.key) {
+                        folded.append("\(member.key) \(scalar)")
+                        continue
+                    }
+                    kept.append(.init(key: member.key, value: strictSchemaCompatible(member.value)))
+                }
+                guard !folded.isEmpty else { return .object(kept) }
+                let suffix = "(" + folded.joined(separator: ", ") + ")"
+                if let i = kept.firstIndex(where: { $0.key == "description" }),
+                   case .string(let existing) = kept[i].value {
+                    kept[i].value = .string(existing.isEmpty ? suffix : existing + " " + suffix)
+                } else {
+                    kept.append(.init(key: "description", value: .string(suffix)))
+                }
+                return .object(kept)
+            default:
+                return node
+            }
         }
 
         func makeMessages(from transcript: Transcript) -> [JSONNode] {
