@@ -151,6 +151,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     let finished = clock.now
                     await RequestTimeline.shared.record(ModelRequestTiming(
                         model: configuration.modelName,
+                        session: (request.metadata["timeline.session"] as? String) ?? "",
                         start: RequestTimeline.shared.offset(of: started),
                         gateWait: started - enqueued,
                         connect: (timing.connectAt ?? finished) - started,

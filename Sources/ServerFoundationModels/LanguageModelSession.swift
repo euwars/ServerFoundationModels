@@ -26,6 +26,12 @@ public final class LanguageModelSession: @unchecked Sendable {
     private var _profileActivated = false
     private var prewarmHint: @Sendable (Transcript) -> Void = { _ in }
 
+    /// An optional caller-set label identifying this session's role (e.g.
+    /// "team pillar", "identity"). Stamped onto every request's metadata so
+    /// timelines and logs can attribute a request — and its tool calls — to
+    /// the session that made it, instead of blurring all sessions on one model.
+    public var timelineLabel: String?
+
     /// Hard cap on executor rounds per turn; only runaway tool loops hit it.
     static let maximumToolRounds = 64
 
@@ -1108,6 +1114,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 reasoningLevel: contextOptions.reasoningLevel ?? resolved?.reasoningLevel
             )
             request.metadata = metadata
+            // Attribute the request to its session, without overriding a
+            // label a caller set explicitly per request.
+            if let timelineLabel, request.metadata["timeline.session"] == nil {
+                request.metadata["timeline.session"] = timelineLabel
+            }
             request.executableTools = activeTools
 
             let perform = resolved?.perform ?? self.perform
@@ -1342,6 +1353,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             // (tools guard their own shared state). Outputs and lifecycle
             // hooks are then applied in call order, so the transcript stays
             // deterministic. A failure cancels the round's remaining calls.
+            let sessionLabel = timelineLabel ?? ""
             let outputs: [String] = try await withThrowingTaskGroup(of: (Int, String).self) { group in
                 for (index, entry) in resolvedCalls.enumerated() {
                     group.addTask {
@@ -1362,6 +1374,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                             }
                             await RequestTimeline.shared.record(ToolRunTiming(
                                 tool: entry.call.toolName,
+                                session: sessionLabel,
                                 start: RequestTimeline.shared.offset(of: toolStarted),
                                 duration: ContinuousClock().now - toolStarted,
                                 input: input,
@@ -1371,6 +1384,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                         } catch {
                             await RequestTimeline.shared.record(ToolRunTiming(
                                 tool: entry.call.toolName,
+                                session: sessionLabel,
                                 start: RequestTimeline.shared.offset(of: toolStarted),
                                 duration: ContinuousClock().now - toolStarted,
                                 input: input,

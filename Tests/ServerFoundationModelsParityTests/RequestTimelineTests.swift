@@ -135,3 +135,37 @@ private struct ExcerptBriefing: DynamicInstructions {
     #expect(html.contains("reportProbe"))
     #expect(!html.contains("TIMELINE_DATA"))  // placeholder replaced with data
 }
+
+@Test func sessionLabelStampsToolRuns() async throws {
+    let script = ScriptBox(rounds: [
+        ScriptedRound(toolCalls: [
+            ScriptedToolCall(id: "c1", name: "timelineSlowProbe", argumentsJSON: #"{"query":"x"}"#)
+        ]),
+        ScriptedRound(textFragments: ["done"]),
+    ])
+    struct Briefing: DynamicInstructions {
+        var body: some DynamicInstructions {
+            Instructions { "Use the probe." }
+            SlowProbe()
+        }
+    }
+    let session = LanguageModelSession(model: ScriptedModel(script: script), dynamicInstructions: Briefing())
+    session.timelineLabel = "market-tools"
+    _ = try await session.respond(to: "go")
+    let snap = await RequestTimeline.shared.snapshot()
+    #expect(snap.toolRuns.contains { $0.tool == "timelineSlowProbe" && $0.session == "market-tools" })
+}
+
+@Test func sessionLabelStampsModelRequests() async throws {
+    let server = try CaptureServer()
+    defer { server.stop() }
+    let model = ChatCompletionsLanguageModel(
+        name: "session-wire-model",
+        url: URL(string: "http://127.0.0.1:\(server.port)")!
+    )
+    let session = LanguageModelSession(model: model)
+    session.timelineLabel = "identity-wire"
+    _ = try await session.respond(to: "hi")
+    let snap = await RequestTimeline.shared.snapshot()
+    #expect(snap.requests.contains { $0.model == "session-wire-model" && $0.session == "identity-wire" })
+}

@@ -2,6 +2,7 @@
 // run — current or archived — opens as an interactive waterfall in a browser
 // with zero extra tooling. Placeholders: TIMELINE_LABEL, TIMELINE_DATA.
 let timelineViewerTemplate = #"""
+<meta charset="utf-8">
 <title>R2 run debugger — TIMELINE_LABEL</title>
 <style>
 :root {
@@ -137,13 +138,6 @@ const DATA = TIMELINE_DATA;
   DATA.marks.forEach(m => m.at += shift);
 }
 
-const laneDefs = [
-  ["gemini",   "main model",  DATA.requests.filter(r => r.model.includes("gemini")).map(r => reqSpan(r))],
-  ["deepseek", "distiller",   DATA.requests.filter(r => r.model.includes("deepseek")).map(r => reqSpan(r))],
-  ["fetch",    "fetchWebpage", toolSpans("fetchWebpage")],
-  ["search",   "searchWeb",    toolSpans("searchWeb")],
-  ["linkedin", "lookupLinkedIn", toolSpans("lookupLinkedInProfile")],
-];
 function reqSpan(r) {
   // A round whose entire answer was tool calls (new data records them as
   // "→ tool …"; older data left the response empty on a successful round).
@@ -154,7 +148,29 @@ function reqSpan(r) {
 function toolSpans(name) {
   return DATA.tools.filter(t => t.tool === name).map(t => ({ kind:"tool", start:t.start, dur:t.duration, ttft:null, d:t }));
 }
-const END = Math.max(...laneDefs.flatMap(l => l[2].map(s => s.start + s.dur))) + 2;
+// Model-request lanes: one per SESSION (identity, plan, each pillar, the
+// distiller), ordered by when each session first ran, so a bar attributes to
+// the session that made it. Timelines recorded before session labels fall
+// back to a single lane split by model.
+const laneDefs = (() => {
+  const bySession = {};
+  for (const r of DATA.requests) {
+    const key = (r.session && r.session.length) ? r.session
+      : (/flash|distill/i.test(r.model) ? "distiller" : "main model");
+    (bySession[key] ||= []).push(reqSpan(r));
+  }
+  const isDistiller = k => /distill/i.test(k);
+  const sessionLanes = Object.entries(bySession)
+    .map(([k, spans]) => ({ key:k, title:k, spans, cat: isDistiller(k) ? "deepseek" : "gemini" }))
+    .sort((a,b) => Math.min(...a.spans.map(s=>s.start)) - Math.min(...b.spans.map(s=>s.start)));
+  return [
+    ...sessionLanes,
+    { key:"fetch", title:"fetchWebpage", spans: toolSpans("fetchWebpage"), cat:"fetch" },
+    { key:"search", title:"searchWeb", spans: toolSpans("searchWeb"), cat:"search" },
+    { key:"linkedin", title:"lookupLinkedIn", spans: toolSpans("lookupLinkedInProfile"), cat:"linkedin" },
+  ];
+})();
+const END = Math.max(...laneDefs.flatMap(l => l.spans.map(s => s.start + s.dur)), 1) + 2;
 const marks = DATA.marks.slice().sort((a,b) => a.at - b.at);
 
 // stats: peak concurrency + volume
@@ -176,7 +192,7 @@ function pack(spans) {
 
 const BARH=9, ROWGAP=3, LANEGAP=16, TOP=46;
 let zoom=1, selected=null;
-const enabled = Object.fromEntries(laneDefs.map(l=>[l[0],true]));
+const enabled = {gemini:true, deepseek:true, fetch:true, search:true, linkedin:true};
 
 function fmt(x, digits=1) { return x.toFixed(digits); }
 function esc(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
@@ -184,13 +200,13 @@ function esc(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
 function render() {
   const pxPerSec = 4.6 * zoom;
   const W = Math.ceil(END * pxPerSec) + 24;
-  const active = laneDefs.filter(l => enabled[l[0]]);
+  const active = laneDefs.filter(l => enabled[l.cat] && l.spans.length);
   let y = TOP;
   const lanes = [];
-  for (const [key, title, spans] of active) {
+  for (const {key, title, spans, cat} of active) {
     const nrows = pack(spans);
     const h = nrows*(BARH+ROWGAP)-ROWGAP;
-    lanes.push({key, title, spans, y, h});
+    lanes.push({key, title, spans, cat, y, h});
     y += h + LANEGAP;
   }
   const H = y + 26;
@@ -219,7 +235,7 @@ function render() {
       const id = `${lane.key}:${si}`;
       const sel = selected === id ? " selected" : "";
       const hollow = s.toolRound ? " hollow" : "";
-      rects.push(`<rect class="bar ${lane.key}${hollow}${sel}" data-id="${id}" x="${fmt(X(s.start),1)}" y="${ry}" width="${fmt(w,1)}" height="${BARH}" rx="2"/>`);
+      rects.push(`<rect class="bar ${lane.cat}${hollow}${sel}" data-id="${id}" x="${fmt(X(s.start),1)}" y="${ry}" width="${fmt(w,1)}" height="${BARH}" rx="2"/>`);
       if (s.ttft && s.dur > 1) {
         rects.push(`<rect class="ttftseg" x="${fmt(X(s.start),1)}" y="${ry}" width="${fmt(Math.max(s.ttft*pxPerSec,1),1)}" height="${BARH}" rx="2"/>`);
       }
@@ -244,7 +260,8 @@ function attach(lanes) {
     el.addEventListener("mousemove", e => {
       const what = s.kind === "request" ? (s.d.prompt || "(no prompt)") : (s.d.input || "");
       const badge = s.kind === "request" ? (s.toolRound ? "⚙ tool-call round · " : "✎ text round · ") : "";
-      tip.textContent = `${badge}${fmt(s.dur)}s @ ${fmt(s.start)}s — ${what.slice(0,90)}`;
+      const sess = s.d.session ? esc(s.d.session)+" · " : "";
+      tip.textContent = `${sess}${badge}${fmt(s.dur)}s @ ${fmt(s.start)}s — ${what.slice(0,90)}`;
       tip.style.display = "block";
       tip.style.left = Math.min(e.clientX+12, innerWidth-440)+"px";
       tip.style.top = (e.clientY+14)+"px";
@@ -269,14 +286,16 @@ function show(lane, s) {
       <span>tokens in</span><b>${d.tokensIn.toLocaleString()}</b>
       <span>tokens out</span><b>${d.tokensOut.toLocaleString()}</b>
       <span>status</span><b>${d.ok ? "ok" : "FAILED"}</b>
-      <span>answered</span><b>${s.toolRound ? "tool calls" : "text"}</b></div>`;
+      <span>answered</span><b>${s.toolRound ? "tool calls" : "text"}</b>
+      <span>session</span><b>${esc(d.session||"—")}</b></div>`;
     io = `<div class="io"><h4>prompt (head)</h4><pre>${esc(d.prompt || "—")}</pre>
       <h4>${s.toolRound ? "tool calls issued" : "response (head)"}</h4><pre>${esc(d.response || (s.toolRound ? "(recorded runs before tool-call capture show the calls in the tool lanes below)" : "—"))}</pre></div>`;
   } else {
     const d = s.d;
     kv = `<div class="kv">
       <span>starts</span><b>${fmt(s.start)}s</b>
-      <span>duration</span><b>${fmt(d.duration)}s</b></div>`;
+      <span>duration</span><b>${fmt(d.duration)}s</b>
+      <span>session</span><b>${esc(d.session||"—")}</b></div>`;
     io = `<div class="io"><h4>arguments</h4><pre>${esc(d.input || "—")}</pre>
       <h4>output (head)</h4><pre>${esc(d.output || "—")}</pre></div>`;
   }
@@ -285,7 +304,7 @@ function show(lane, s) {
 
 // longest-spans table
 const all = [];
-laneDefs.forEach(([key, title, spans]) => spans.forEach((s, si) => all.push({key, title, s, si})));
+laneDefs.forEach(({key, title, spans}) => spans.forEach((s, si) => all.push({key, title, s, si})));
 all.sort((a,b) => b.s.dur - a.s.dur);
 document.querySelector("#topspans tbody").innerHTML = all.slice(0,18).map((e,i) => {
   const what = e.s.kind === "request" ? (e.s.d.prompt || "") : (e.s.d.input || "");

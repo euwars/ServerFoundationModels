@@ -15,14 +15,16 @@ public enum TimelineReport {
         let (requests, toolRuns, marks) = await RequestTimeline.shared.snapshot()
         let payload: [String: Any] = [
             "requests": requests.map { [
-                "model": $0.model, "start": seconds($0.start), "gateWait": seconds($0.gateWait),
+                "model": $0.model, "session": $0.session,
+                "start": seconds($0.start), "gateWait": seconds($0.gateWait),
                 "connect": seconds($0.connect), "firstToken": seconds($0.firstToken),
                 "total": seconds($0.total), "ok": $0.succeeded,
                 "prompt": $0.promptExcerpt, "response": $0.responseExcerpt,
                 "tokensIn": $0.inputTokens, "tokensOut": $0.outputTokens,
             ] },
             "tools": toolRuns.map { [
-                "tool": $0.tool, "start": seconds($0.start), "duration": seconds($0.duration),
+                "tool": $0.tool, "session": $0.session,
+                "start": seconds($0.start), "duration": seconds($0.duration),
                 "input": $0.input, "output": $0.output,
             ] },
             "marks": marks.map { ["label": $0.label, "at": seconds($0.at)] },

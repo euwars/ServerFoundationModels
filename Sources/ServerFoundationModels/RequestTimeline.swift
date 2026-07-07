@@ -11,6 +11,10 @@
 /// request's content to debug a run from the timeline alone.
 public struct ModelRequestTiming: Sendable {
     public let model: String
+    /// Which session made this request (its `timelineLabel`), so requests —
+    /// and their tool calls — can be attributed to a pillar/identity/plan
+    /// session instead of blurring together on one model lane. "" if unset.
+    public let session: String
     /// When the request started, on the timeline's clock — spans plotted
     /// against this reconstruct the run as a waterfall.
     public let start: Duration
@@ -35,6 +39,9 @@ public struct ModelRequestTiming: Sendable {
 /// One tool execution inside a session's tool-call loop.
 public struct ToolRunTiming: Sendable {
     public let tool: String
+    /// The session that invoked this tool (its `timelineLabel`), so a fetch
+    /// or search attributes to the pillar that made it. "" if unset.
+    public let session: String
     /// When the tool run started, on the timeline's clock.
     public let start: Duration
     public let duration: Duration
@@ -90,6 +97,7 @@ public actor RequestTimeline {
     /// wrapping its nested model calls instead of orphaned requests.
     nonisolated public func measureToolRun<T: Sendable>(
         _ tool: String,
+        session: String = "",
         input: String,
         output: @Sendable (T) -> String,
         body: () async throws -> T
@@ -98,7 +106,7 @@ public actor RequestTimeline {
         do {
             let result = try await body()
             await record(ToolRunTiming(
-                tool: tool, start: offset(of: started),
+                tool: tool, session: session, start: offset(of: started),
                 duration: ContinuousClock().now - started,
                 input: String(input.prefix(400)),
                 output: String(output(result).prefix(600))
@@ -106,7 +114,7 @@ public actor RequestTimeline {
             return result
         } catch {
             await record(ToolRunTiming(
-                tool: tool, start: offset(of: started),
+                tool: tool, session: session, start: offset(of: started),
                 duration: ContinuousClock().now - started,
                 input: String(input.prefix(400)),
                 output: "threw: \(String(describing: error).prefix(300))"
