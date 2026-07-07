@@ -251,3 +251,31 @@ private struct SleepyBriefing: DynamicInstructions {
     }
     #expect(outputs == ["slept first", "slept second", "slept third"])
 }
+
+@Test func hallucinatedToolNameRecoversInsteadOfCrashing() async throws {
+    // The model calls a tool that isn't registered, then answers normally.
+    let script = ScriptBox(rounds: [
+        ScriptedRound(toolCalls: [
+            ScriptedToolCall(id: "c1", name: "notARealTool", argumentsJSON: #"{"x":1}"#)
+        ]),
+        ScriptedRound(textFragments: ["recovered"]),
+    ])
+    struct Briefing: DynamicInstructions {
+        var body: some DynamicInstructions {
+            Instructions { "Use the probe." }
+            PipelineProbeTool(recorder: BehaviorRecorder())
+        }
+    }
+    let session = LanguageModelSession(model: ScriptedModel(script: script), dynamicInstructions: Briefing())
+    // Must NOT throw — the unknown tool is fed back and the loop continues.
+    let response = try await session.respond(to: "go")
+    #expect(response.content == "recovered")
+    // The transcript carries the recovery message as the tool output.
+    let outputs = session.transcript.compactMap { e -> String? in
+        if case .toolOutput(let o) = e {
+            return o.segments.compactMap { if case .text(let t) = $0 { return t.content }; return nil }.joined()
+        }
+        return nil
+    }
+    #expect(outputs.contains { $0.contains("no tool named 'notARealTool'") && $0.contains("verifyClaim") })
+}

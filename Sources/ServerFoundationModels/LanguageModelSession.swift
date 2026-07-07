@@ -1338,16 +1338,12 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
             appendEntry(.toolCalls(Transcript.ToolCalls(calls: transcriptCalls)))
 
-            // Resolve every tool up front — an unknown name fails the round
-            // before any tool runs.
-            let resolvedCalls: [(call: Transcript.ToolCall, tool: ErasedTool)] = try transcriptCalls.map { call in
-                guard let tool = activeTools.first(where: { $0.name == call.toolName }) else {
-                    throw ToolCallError(
-                        tool: UnregisteredToolReference(name: call.toolName),
-                        underlyingError: UnregisteredToolCall(toolName: call.toolName)
-                    )
-                }
-                return (call, tool)
+            // Resolve each call against the registered tools. An unknown name
+            // is the model's mistake (hallucinated tool), not a fatal error —
+            // it's fed back so the next round picks a real tool.
+            let availableToolNames = activeTools.map(\.name)
+            let resolvedCalls: [(call: Transcript.ToolCall, tool: ErasedTool?)] = transcriptCalls.map { call in
+                (call, activeTools.first(where: { $0.name == call.toolName }))
             }
             // A round's tool calls run CONCURRENTLY — the framework contract
             // (tools guard their own shared state). Outputs and lifecycle
@@ -1359,11 +1355,26 @@ public final class LanguageModelSession: @unchecked Sendable {
                     group.addTask {
                         let toolStarted = ContinuousClock().now
                         let input = String(entry.call.arguments.jsonString.prefix(400))
+                        func recordRun(_ out: String) async {
+                            await RequestTimeline.shared.record(ToolRunTiming(
+                                tool: entry.call.toolName, session: sessionLabel,
+                                start: RequestTimeline.shared.offset(of: toolStarted),
+                                duration: ContinuousClock().now - toolStarted,
+                                input: input, output: String(out.prefix(600))
+                            ))
+                        }
+                        guard let tool = entry.tool else {
+                            // Hallucinated tool name — recover instead of
+                            // crashing the whole session.
+                            let msg = "no tool named '\(entry.call.toolName)' is available in this session; available tools: \(availableToolNames.joined(separator: ", ")). Call one of these instead."
+                            await recordRun(msg)
+                            return (index, msg)
+                        }
                         do {
                             let output: String
                             do {
                                 output = try await SessionPropertyValues.$current.withValue(properties) {
-                                    try await entry.tool.call(entry.call.arguments)
+                                    try await tool.call(entry.call.arguments)
                                 }
                             } catch let decode as GeneratedContentError {
                                 // Malformed ARGUMENTS are the model's mistake,
@@ -1372,25 +1383,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                                 // self-corrects instead of killing the turn.
                                 output = "invalid arguments for \(entry.call.toolName): \(decode). Call it again with corrected arguments."
                             }
-                            await RequestTimeline.shared.record(ToolRunTiming(
-                                tool: entry.call.toolName,
-                                session: sessionLabel,
-                                start: RequestTimeline.shared.offset(of: toolStarted),
-                                duration: ContinuousClock().now - toolStarted,
-                                input: input,
-                                output: String(output.prefix(600))
-                            ))
+                            await recordRun(output)
                             return (index, output)
                         } catch {
-                            await RequestTimeline.shared.record(ToolRunTiming(
-                                tool: entry.call.toolName,
-                                session: sessionLabel,
-                                start: RequestTimeline.shared.offset(of: toolStarted),
-                                duration: ContinuousClock().now - toolStarted,
-                                input: input,
-                                output: "threw: \(String(describing: error).prefix(300))"
-                            ))
-                            throw ToolCallError(tool: entry.tool.original, underlyingError: error)
+                            await recordRun("threw: \(String(describing: error).prefix(300))")
+                            throw ToolCallError(tool: tool.original, underlyingError: error)
                         }
                     }
                 }
