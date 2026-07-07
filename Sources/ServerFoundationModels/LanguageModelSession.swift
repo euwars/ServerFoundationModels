@@ -48,8 +48,20 @@ public final class LanguageModelSession: @unchecked Sendable {
         set { state.withLock { $0.errorPolicy = newValue } }
     }
 
+    /// The conversation so far. Settable (SDK 27) — but only while the session
+    /// is not responding; mutating it mid-response is a programmer error, since
+    /// the in-flight turn is appending to the same transcript.
     public var transcript: Transcript {
-        state.withLock { $0.transcript }
+        get { state.withLock { $0.transcript } }
+        set {
+            state.withLock {
+                precondition(
+                    !$0.isResponding,
+                    "LanguageModelSession.transcript may only be set while isResponding == false"
+                )
+                $0.transcript = newValue
+            }
+        }
     }
 
     public var isResponding: Bool {

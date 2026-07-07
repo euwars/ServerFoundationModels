@@ -44,7 +44,8 @@ public struct GenerationOptions: Sendable, Equatable {
 
     public var samplingMode: SamplingMode?
 
-    /// SDK 27 name for `samplingMode`.
+    /// Deprecated SDK-26 spelling of `samplingMode`, kept for source
+    /// compatibility. New code should use `samplingMode`.
     public var sampling: SamplingMode? {
         get { samplingMode }
         set { samplingMode = newValue }
@@ -260,9 +261,41 @@ public enum LanguageModelError: LocalizedError, CustomDebugStringConvertible {
     public struct Refusal: Sendable {
         public var debugDescription: String
         public var metadata: [String: any Sendable]
-        public init(debugDescription: String, metadata: [String: any Sendable] = [:]) {
+        /// The conversation up to and including the refusal. Continuing it is
+        /// how `explanation` produces a model-authored reason for the refusal.
+        public var transcriptEntries: [Transcript.Entry]
+        public init(
+            debugDescription: String,
+            metadata: [String: any Sendable] = [:],
+            transcriptEntries: [Transcript.Entry] = []
+        ) {
             self.debugDescription = debugDescription
             self.metadata = metadata
+            self.transcriptEntries = transcriptEntries
+        }
+
+        /// A model-generated explanation of the refusal, produced by continuing
+        /// the refusing conversation on the default on-device model.
+        public var explanation: LanguageModelSession.Response<String> {
+            get async throws {
+                let session = LanguageModelSession(
+                    model: SystemLanguageModel.default,
+                    transcript: Transcript(entries: transcriptEntries)
+                )
+                return try await session.respond(
+                    to: "Briefly explain why the previous request was declined."
+                )
+            }
+        }
+
+        public var explanationStream: LanguageModelSession.ResponseStream<String> {
+            let session = LanguageModelSession(
+                model: SystemLanguageModel.default,
+                transcript: Transcript(entries: transcriptEntries)
+            )
+            return session.streamResponse(
+                to: "Briefly explain why the previous request was declined."
+            )
         }
     }
 

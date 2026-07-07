@@ -317,7 +317,11 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
         availability == .available
     }
 
-    public var contextSize: Int { 0 }
+    /// Async throwing (SDK 27) — the real PCC model may reach the network to
+    /// resolve its context window. Unavailable off-device here, so it reports 0.
+    public var contextSize: Int {
+        get async throws { 0 }
+    }
 
     public var supportedLanguages: Set<Locale.Language> { [] }
 

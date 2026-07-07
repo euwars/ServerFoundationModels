@@ -128,8 +128,8 @@ struct WireCaptureTests {
         #expect(Set(required) == ["isActive", "count", "ratio", "weight", "price", "mood", "pastMoods"])
     }
 
-    @Test("guide bounds (minimum/maximum/minItems/maxItems) reach the schema on the wire")
-    func guideBoundsGoOut() async throws {
+    @Test("guide bounds fold into the description for strict json_schema endpoints")
+    func guideBoundsFoldIntoDescription() async throws {
         let server = try CaptureServer()
         defer { server.stop() }
 
@@ -145,10 +145,21 @@ struct WireCaptureTests {
 
         let body = try #require(server.lastBody)
         let text = String(decoding: body, as: UTF8.self)
-        #expect(text.contains(#""minimum":1"#), "TravelDay.dayNumber @Guide(.minimum(1))")
-        #expect(text.contains(#""minimum":15"#) && text.contains(#""maximum":240"#), ".range(15...240)")
-        #expect(text.contains(#""minItems":1"#), ".minimumCount(1) on activities")
-        #expect(text.contains(#""minItems":2"#) && text.contains(#""maxItems":2"#), ".count(2) on days")
+
+        // The response schema is sent with `strict: true`, and strict
+        // structured-output endpoints (OpenAI, Anthropic) reject JSON Schema
+        // value-constraint keywords. So the provider strips them from the wire
+        // schema and folds each into the property description instead, keeping
+        // the authored `@Guide` intent visible to the model.
+        #expect(!text.contains(#""minimum":"#), "minimum keyword must be stripped for strict mode")
+        #expect(!text.contains(#""maximum":"#), "maximum keyword must be stripped for strict mode")
+        #expect(!text.contains(#""minItems":"#), "minItems keyword must be stripped for strict mode")
+        #expect(!text.contains(#""maxItems":"#), "maxItems keyword must be stripped for strict mode")
+
+        #expect(text.contains("(minimum 1)"), "TravelDay.dayNumber @Guide(.minimum(1))")
+        #expect(text.contains("(minimum 15, maximum 240)"), "TravelActivity.durationMinutes .range(15...240)")
+        #expect(text.contains("(minItems 1)"), ".minimumCount(1) on activities")
+        #expect(text.contains("(minItems 2, maxItems 2)"), ".count(2) on days")
     }
 }
 
