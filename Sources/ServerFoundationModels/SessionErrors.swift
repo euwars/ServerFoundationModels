@@ -86,7 +86,7 @@ extension LanguageModelSession {
         }
     }
 
-    public struct ToolCallError: LocalizedError {
+    public struct ToolCallError: LocalizedError, CustomStringConvertible, CustomDebugStringConvertible {
         public var tool: any Tool
         public var underlyingError: any Swift.Error
 
@@ -94,6 +94,13 @@ extension LanguageModelSession {
             self.tool = tool
             self.underlyingError = underlyingError
         }
+
+        // Default struct reflection would dump the tool's stored properties —
+        // including any API keys it holds. Print the name, never the tool.
+        public var description: String {
+            "tool '\(tool.name)' failed: \(underlyingError)"
+        }
+        public var debugDescription: String { description }
 
         public var errorDescription: String? {
             "Tool '\(tool.name)' failed: \(underlyingError.localizedDescription)"

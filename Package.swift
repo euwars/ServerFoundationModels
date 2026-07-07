@@ -17,6 +17,7 @@ let package = Package(
     ],
     products: [
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
+        .library(name: "ServerFoundationModelsTimeline", targets: ["ServerFoundationModelsTimeline"]),
         .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
         .executable(name: "XAIServerToolsProbe", targets: ["XAIServerToolsProbe"]),
         .executable(name: "XAIDeepResearchProbe", targets: ["XAIDeepResearchProbe"]),
@@ -49,6 +50,11 @@ let package = Package(
                     condition: .when(traits: ["AsyncHTTPClient"])
                 ),
             ],
+            swiftSettings: concurrencySettings
+        ),
+        .target(
+            name: "ServerFoundationModelsTimeline",
+            dependencies: ["ServerFoundationModels"],
             swiftSettings: concurrencySettings
         ),
         .macro(
@@ -112,6 +118,7 @@ let package = Package(
             name: "ServerFoundationModelsParityTests",
             dependencies: [
                 "ServerFoundationModels",
+                "ServerFoundationModelsTimeline",
                 .product(name: "Logging", package: "swift-log"),
             ],
             swiftSettings: concurrencySettings + [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]

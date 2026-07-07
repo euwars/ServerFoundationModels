@@ -24,6 +24,16 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// Whether the endpoint supports `response_format` for structured output.
     public var supportsGuidedGeneration: Bool
 
+    /// How structured output rides the wire. OpenAI-style endpoints take the
+    /// full JSON schema (`.jsonSchema`); some (Ollama's compat layer) silently
+    /// IGNORE it and only honor `{"type":"json_object"}` — the schema then
+    /// constrains via the prompt, which the session includes by default.
+    public enum SchemaWire: String, Hashable, Sendable {
+        case jsonSchema
+        case jsonObject
+    }
+    public var schemaWire: SchemaWire
+
     /// Provider-executed server tools (e.g. `openrouter:web_search`) injected
     /// verbatim into each request's `tools` array.
     public var serverTools: [ChatCompletionsServerTool]
@@ -53,6 +63,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         url: URL,
         additionalHeaders: [String: String] = [:],
         supportsGuidedGeneration: Bool = true,
+        schemaWire: SchemaWire = .jsonSchema,
         serverTools: [ChatCompletionsServerTool] = [],
         stream: Bool = true,
         timeout: TimeInterval = 600,
@@ -62,6 +73,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         self.url = url
         self.additionalHeaders = additionalHeaders
         self.supportsGuidedGeneration = supportsGuidedGeneration
+        self.schemaWire = schemaWire
         self.serverTools = serverTools
         self.stream = stream
         self.timeout = timeout
@@ -81,6 +93,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             url: url,
             additionalHeaders: additionalHeaders,
             supportsGuidedGeneration: supportsGuidedGeneration,
+            schemaWire: schemaWire,
             serverTools: serverTools,
             stream: stream,
             timeout: timeout,
@@ -96,6 +109,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             var url: URL
             var additionalHeaders: [String: String]
             var supportsGuidedGeneration: Bool
+            var schemaWire: SchemaWire = .jsonSchema
             var serverTools: [ChatCompletionsServerTool] = []
             var stream: Bool = true
             var timeout: TimeInterval = 600
@@ -113,18 +127,57 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             model: ChatCompletionsLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
+            let clock = ContinuousClock()
+            let enqueued = clock.now
             // One permit per HTTP request (connect through end of stream),
             // never per session turn — a tool handler that calls a model
             // itself cannot deadlock on the gate.
             try await RequestGate.shared.withPermit {
-                try await gatedRespond(to: request, model: model, streamingInto: channel)
+                let started = clock.now
+                let timing = RequestTimingBox()
+                let promptExcerpt: String = {
+                    for entry in request.transcript.reversed() {
+                        if case .prompt(let prompt) = entry {
+                            let text = prompt.segments.compactMap { segment -> String? in
+                                if case .text(let text) = segment { return text.content }
+                                return nil
+                            }.joined(separator: " ")
+                            return String(text.prefix(400))
+                        }
+                    }
+                    return ""
+                }()
+                func record(succeeded: Bool) async {
+                    let finished = clock.now
+                    await RequestTimeline.shared.record(ModelRequestTiming(
+                        model: configuration.modelName,
+                        start: RequestTimeline.shared.offset(of: started),
+                        gateWait: started - enqueued,
+                        connect: (timing.connectAt ?? finished) - started,
+                        firstToken: (timing.firstEventAt ?? finished) - started,
+                        total: finished - started,
+                        succeeded: succeeded,
+                        promptExcerpt: promptExcerpt,
+                        responseExcerpt: timing.responseExcerpt,
+                        inputTokens: timing.inputTokens,
+                        outputTokens: timing.outputTokens
+                    ))
+                }
+                do {
+                    try await gatedRespond(to: request, model: model, streamingInto: channel, timing: timing)
+                    await record(succeeded: true)
+                } catch {
+                    await record(succeeded: false)
+                    throw error
+                }
             }
         }
 
         private func gatedRespond(
             to request: LanguageModelExecutorGenerationRequest,
             model: ChatCompletionsLanguageModel,
-            streamingInto channel: LanguageModelExecutorGenerationChannel
+            streamingInto channel: LanguageModelExecutorGenerationChannel,
+            timing: RequestTimingBox
         ) async throws {
             let logger = model.logger
             let urlRequest = try makeURLRequest(for: request)
@@ -138,6 +191,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 "guided": .stringConvertible(request.schema != nil),
             ])
             let (lines, response) = try await HTTPLineStream.connect(urlRequest)
+            timing.connectAt = ContinuousClock().now
 
             if !(200..<300).contains(response.statusCode) {
                 var bodyLines: [String] = []
@@ -168,7 +222,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
             // Non-streaming: read the whole JSON body and emit once.
             if !configuration.stream {
-                try await respondNonStreaming(lines: lines, channel: channel, logger: logger)
+                try await respondNonStreaming(lines: lines, channel: channel, logger: logger, timing: timing)
                 return
             }
 
@@ -185,6 +239,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 var line = Substring(rawLine)
                 if isFirstLine {
                     isFirstLine = false
+                    timing.firstEventAt = ContinuousClock().now
                     // A single leading U+FEFF BOM at stream start is ignored.
                     if line.first == "\u{FEFF}" { line.removeFirst() }
                 }
@@ -192,7 +247,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     guard !pendingData.isEmpty else { continue }
                     let payload = pendingData.joined(separator: "\n")
                     pendingData.removeAll()
-                    if try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger) {
+                    if try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger, timing: timing) {
                         break
                     }
                     continue
@@ -206,11 +261,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             // anyway so providers that omit the trailing blank line still work.
             if !pendingData.isEmpty {
                 let payload = pendingData.joined(separator: "\n")
-                _ = try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger)
+                _ = try await processEvent(payload, toolCalls: &toolCalls, citations: &citations, channel: channel, logger: logger, timing: timing)
             }
 
             for index in toolCalls.calls.keys.sorted() {
                 let call = toolCalls.calls[index]!
+                // A round whose whole answer is tool calls has no text — the
+                // timeline shows the calls instead of an empty response.
+                timing.appendResponse("→ \(call.name) \(String(call.arguments.prefix(140)))\n")
                 await channel.send(.toolCalls(action: .toolCall(
                     id: call.id.isEmpty ? UUID().uuidString : call.id,
                     name: call.name,
@@ -233,7 +291,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         private func respondNonStreaming(
             lines: AsyncThrowingStream<String, any Error>,
             channel: LanguageModelExecutorGenerationChannel,
-            logger: Logger
+            logger: Logger,
+            timing: RequestTimingBox
         ) async throws {
             var body = ""
             for try await line in lines { body += line + "\n" }
@@ -247,6 +306,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             let message = chunk["choices"]?[0]?["message"]
             if case .string(let content)? = message?["content"], !content.isEmpty {
                 await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+                timing.appendResponse(content)
             }
             for reasoningKey in ["reasoning", "reasoning_content"] {
                 if case .string(let reasoning)? = message?[reasoningKey], !reasoning.isEmpty {
@@ -259,6 +319,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     if case .number(let value) = node, let exact = Int(exactly: value) { return exact }
                     return 0
                 }
+                timing.inputTokens = intValue(usage["prompt_tokens"])
+                timing.outputTokens = intValue(usage["completion_tokens"])
                 await channel.send(.response(action: .updateUsage(
                     input: .init(
                         totalTokenCount: intValue(usage["prompt_tokens"]),
@@ -275,6 +337,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 accumulator.ingest(calls)
                 for index in accumulator.calls.keys.sorted() {
                     let call = accumulator.calls[index]!
+                    timing.appendResponse("→ \(call.name) \(String(call.arguments.prefix(140)))\n")
                     await channel.send(.toolCalls(action: .toolCall(
                         id: call.id.isEmpty ? UUID().uuidString : call.id,
                         name: call.name,
@@ -306,7 +369,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             toolCalls: inout ToolCallAccumulator,
             citations: inout [WebCitationSegment.Citation],
             channel: LanguageModelExecutorGenerationChannel,
-            logger: Logger
+            logger: Logger,
+            timing: RequestTimingBox
         ) async throws -> Bool {
             if payload.trimmingCharacters(in: .whitespaces) == "[DONE]" { return true }
             guard let chunk = try? JSONNode.parse(payload) else {
@@ -322,6 +386,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             let delta = choice?["delta"]
             if case .string(let content) = delta?["content"], !content.isEmpty {
                 await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+                timing.appendResponse(content)
             }
             for reasoningKey in ["reasoning", "reasoning_content"] {
                 if case .string(let reasoning) = delta?[reasoningKey], !reasoning.isEmpty {
@@ -336,6 +401,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     if case .number(let value) = node, let exact = Int(exactly: value) { return exact }
                     return 0
                 }
+                timing.inputTokens = intValue(usage["prompt_tokens"])
+                timing.outputTokens = intValue(usage["completion_tokens"])
                 await channel.send(.response(action: .updateUsage(
                     input: .init(
                         totalTokenCount: intValue(usage["prompt_tokens"]),
@@ -516,7 +583,24 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                     .init(key: "include_usage", value: .bool(true))
                 ])))
             }
-            members.append(.init(key: "messages", value: .array(makeMessages(from: request.transcript))))
+            var messageNodes = makeMessages(from: request.transcript)
+            // When the wire cannot carry the schema (json_object mode, or no
+            // guided generation at all), it must reach the model through the
+            // prompt — otherwise the model never sees the field names and
+            // answers in prose. Suppressed per request once the transcript
+            // demonstrates the format (includeSchemaInPrompt: false).
+            if let schema = request.schema,
+               configuration.schemaWire == .jsonObject || !configuration.supportsGuidedGeneration,
+               request.contextOptions.includeSchemaInPrompt != false {
+                messageNodes.append(.object([
+                    .init(key: "role", value: .string("system")),
+                    .init(key: "content", value: .string(
+                        "Respond with a single JSON object matching this JSON schema exactly — no prose, no markdown fences:\n"
+                            + schema.jsonSchemaDocument.serialized
+                    )),
+                ]))
+            }
+            members.append(.init(key: "messages", value: .array(messageNodes)))
 
             if let reasoningLevel = request.contextOptions.reasoningLevel {
                 let effort: String
@@ -568,10 +652,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 ])
             }
             // Provider-executed server tools (e.g. openrouter:web_search) are
-            // passed through verbatim alongside any function tools.
-            for serverTool in configuration.serverTools {
-                if let node = try? JSONNode.parse(serverTool.json) {
-                    tools.append(node)
+            // passed through verbatim alongside any function tools — except on
+            // turns that forbid tool calling (structured extraction), where a
+            // server-side search would silently run and bill anyway.
+            if request.generationOptions.toolCallingMode?.kind != .disallowed {
+                for serverTool in configuration.serverTools {
+                    if let node = try? JSONNode.parse(serverTool.json) {
+                        tools.append(node)
+                    }
                 }
             }
             if !tools.isEmpty {
@@ -588,14 +676,23 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             }
 
             if let schema = request.schema, configuration.supportsGuidedGeneration {
-                members.append(.init(key: "response_format", value: .object([
-                    .init(key: "type", value: .string("json_schema")),
-                    .init(key: "json_schema", value: .object([
-                        .init(key: "name", value: .string("response")),
-                        .init(key: "strict", value: .bool(true)),
-                        .init(key: "schema", value: strictSchemaCompatible(schema.jsonSchemaDocument)),
-                    ])),
-                ])))
+                switch configuration.schemaWire {
+                case .jsonSchema:
+                    members.append(.init(key: "response_format", value: .object([
+                        .init(key: "type", value: .string("json_schema")),
+                        .init(key: "json_schema", value: .object([
+                            .init(key: "name", value: .string("response")),
+                            .init(key: "strict", value: .bool(true)),
+                            .init(key: "schema", value: strictSchemaCompatible(schema.jsonSchemaDocument)),
+                        ])),
+                    ])))
+                case .jsonObject:
+                    // Endpoints that ignore json_schema still enforce JSON
+                    // syntax; field structure rides in the prompt schema.
+                    members.append(.init(key: "response_format", value: .object([
+                        .init(key: "type", value: .string("json_object")),
+                    ])))
+                }
             }
 
             // Caller-supplied body fields ride last so explicit routing

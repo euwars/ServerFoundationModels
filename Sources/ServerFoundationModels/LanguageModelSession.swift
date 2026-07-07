@@ -188,6 +188,10 @@ public final class LanguageModelSession: @unchecked Sendable {
             var resolved = ResolvedProfile()
             let text = erased.allInstructionTexts.joined(separator: "\n")
             resolved.instructionsText = text.isEmpty ? nil : text
+            // Tools declared in the body register with the session — same as
+            // instruction texts, re-resolved every round. Dropping them here
+            // once shipped sessions whose models silently never saw a tool.
+            resolved.tools = erased.allInstructionTools
             return resolved
         }
     }
@@ -1323,31 +1327,74 @@ public final class LanguageModelSession: @unchecked Sendable {
             }
             appendEntry(.toolCalls(Transcript.ToolCalls(calls: transcriptCalls)))
 
-            for call in transcriptCalls {
+            // Resolve every tool up front — an unknown name fails the round
+            // before any tool runs.
+            let resolvedCalls: [(call: Transcript.ToolCall, tool: ErasedTool)] = try transcriptCalls.map { call in
                 guard let tool = activeTools.first(where: { $0.name == call.toolName }) else {
                     throw ToolCallError(
                         tool: UnregisteredToolReference(name: call.toolName),
                         underlyingError: UnregisteredToolCall(toolName: call.toolName)
                     )
                 }
-                let output: String
-                do {
-                    output = try await SessionPropertyValues.$current.withValue(properties) {
-                        try await tool.call(call.arguments)
+                return (call, tool)
+            }
+            // A round's tool calls run CONCURRENTLY — the framework contract
+            // (tools guard their own shared state). Outputs and lifecycle
+            // hooks are then applied in call order, so the transcript stays
+            // deterministic. A failure cancels the round's remaining calls.
+            let outputs: [String] = try await withThrowingTaskGroup(of: (Int, String).self) { group in
+                for (index, entry) in resolvedCalls.enumerated() {
+                    group.addTask {
+                        let toolStarted = ContinuousClock().now
+                        let input = String(entry.call.arguments.jsonString.prefix(400))
+                        do {
+                            let output: String
+                            do {
+                                output = try await SessionPropertyValues.$current.withValue(properties) {
+                                    try await entry.tool.call(entry.call.arguments)
+                                }
+                            } catch let decode as GeneratedContentError {
+                                // Malformed ARGUMENTS are the model's mistake,
+                                // not the tool's failure — feed the decode
+                                // error back as tool output so the next round
+                                // self-corrects instead of killing the turn.
+                                output = "invalid arguments for \(entry.call.toolName): \(decode). Call it again with corrected arguments."
+                            }
+                            await RequestTimeline.shared.record(ToolRunTiming(
+                                tool: entry.call.toolName,
+                                start: RequestTimeline.shared.offset(of: toolStarted),
+                                duration: ContinuousClock().now - toolStarted,
+                                input: input,
+                                output: String(output.prefix(600))
+                            ))
+                            return (index, output)
+                        } catch {
+                            await RequestTimeline.shared.record(ToolRunTiming(
+                                tool: entry.call.toolName,
+                                start: RequestTimeline.shared.offset(of: toolStarted),
+                                duration: ContinuousClock().now - toolStarted,
+                                input: input,
+                                output: "threw: \(String(describing: error).prefix(300))"
+                            ))
+                            throw ToolCallError(tool: entry.tool.original, underlyingError: error)
+                        }
                     }
-                } catch {
-                    throw ToolCallError(tool: tool.original, underlyingError: error)
                 }
+                var collected = [String?](repeating: nil, count: resolvedCalls.count)
+                for try await (index, output) in group { collected[index] = output }
+                return collected.compactMap { $0 }
+            }
+            for (entry, output) in zip(resolvedCalls, outputs) {
                 let toolOutput = Transcript.ToolOutput(
-                    id: call.id,
-                    toolName: call.toolName,
+                    id: entry.call.id,
+                    toolName: entry.call.toolName,
                     segments: [.text(.init(content: output))]
                 )
                 appendEntry(.toolOutput(toolOutput))
                 if let resolved {
-                    for action in resolved.onToolCall { try await action(call) }
+                    for action in resolved.onToolCall { try await action(entry.call) }
                     for action in resolved.onToolOutput { try await action(toolOutput) }
-                    for action in resolved.onToolCallOutputPair { try await action(call, toolOutput) }
+                    for action in resolved.onToolCallOutputPair { try await action(entry.call, toolOutput) }
                 }
             }
         }

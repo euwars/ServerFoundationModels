@@ -297,3 +297,48 @@ private let SOCK_STREAM_VALUE = SOCK_STREAM
 #else
 private let SOCK_STREAM_VALUE = Int32(SOCK_STREAM.rawValue)
 #endif
+
+@Test func jsonObjectSchemaWireSendsJsonObjectResponseFormat() async throws {
+    let server = try CaptureServer()
+    defer { server.stop() }
+    let model = ChatCompletionsLanguageModel(
+        name: "wire-json-object",
+        url: URL(string: "http://127.0.0.1:\(server.port)")!,
+        schemaWire: .jsonObject
+    )
+    let session = LanguageModelSession(model: model)
+    _ = try await session.respond(to: "Suggest a craft idea.", generating: CraftIdea.self)
+
+    let body = try #require(server.lastBody)
+    let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let responseFormat = try #require(json["response_format"] as? [String: Any])
+    // Endpoints on this wire ignore json_schema — only json_object is sent;
+    // the schema still constrains via the prompt.
+    #expect(responseFormat["type"] as? String == "json_object")
+    #expect(responseFormat["json_schema"] == nil)
+    // The schema still reaches the model through the prompt.
+    #expect(String(decoding: body, as: UTF8.self).contains("title"))
+}
+
+@Test func serverToolsStayOffToolDisallowedTurns() async throws {
+    let server = try CaptureServer()
+    defer { server.stop() }
+    let model = ChatCompletionsLanguageModel(
+        name: "wire-server-tools",
+        url: URL(string: "http://127.0.0.1:\(server.port)")!,
+        serverTools: [.openRouterWebSearch(engine: "native")]
+    )
+    let session = LanguageModelSession(model: model)
+    _ = try await session.respond(
+        to: "Report findings.",
+        generating: CraftIdea.self,
+        options: GenerationOptions(toolCallingMode: .disallowed)
+    )
+    let body = try #require(server.lastBody)
+    // A disallowed-tools turn must not smuggle a billable server search.
+    #expect(!String(decoding: body, as: UTF8.self).contains("openrouter:web_search"))
+
+    _ = try await session.respond(to: "Now search for something.")
+    let second = try #require(server.lastBody)
+    #expect(String(decoding: second, as: UTF8.self).contains("openrouter:web_search"))
+}
