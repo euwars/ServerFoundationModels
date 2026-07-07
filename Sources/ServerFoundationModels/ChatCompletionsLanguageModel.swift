@@ -36,6 +36,12 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// Per-request timeout, in seconds.
     public var timeout: TimeInterval
 
+    /// A JSON object merged verbatim into every request body — for provider
+    /// routing controls the standard fields don't cover, e.g. OpenRouter's
+    /// `{"provider":{"order":["SomeProvider"],"allow_fallbacks":false}}`.
+    /// Invalid or non-object JSON is ignored.
+    public var additionalBodyJSON: String?
+
     /// Transport diagnostics via swift-log: request lifecycle at `.debug`,
     /// HTTP errors at `.warning`, skipped SSE frames at `.debug`. Prompt,
     /// instruction, and response CONTENT is never logged at any level.
@@ -49,7 +55,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         supportsGuidedGeneration: Bool = true,
         serverTools: [ChatCompletionsServerTool] = [],
         stream: Bool = true,
-        timeout: TimeInterval = 600
+        timeout: TimeInterval = 600,
+        additionalBodyJSON: String? = nil
     ) {
         self.name = name
         self.url = url
@@ -58,6 +65,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         self.serverTools = serverTools
         self.stream = stream
         self.timeout = timeout
+        self.additionalBodyJSON = additionalBodyJSON
     }
 
     public var capabilities: LanguageModelCapabilities {
@@ -75,7 +83,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             supportsGuidedGeneration: supportsGuidedGeneration,
             serverTools: serverTools,
             stream: stream,
-            timeout: timeout
+            timeout: timeout,
+            additionalBodyJSON: additionalBodyJSON
         )
     }
 
@@ -90,6 +99,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             var serverTools: [ChatCompletionsServerTool] = []
             var stream: Bool = true
             var timeout: TimeInterval = 600
+            var additionalBodyJSON: String? = nil
         }
 
         let configuration: Configuration
@@ -99,6 +109,19 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         }
 
         public func respond(
+            to request: LanguageModelExecutorGenerationRequest,
+            model: ChatCompletionsLanguageModel,
+            streamingInto channel: LanguageModelExecutorGenerationChannel
+        ) async throws {
+            // One permit per HTTP request (connect through end of stream),
+            // never per session turn — a tool handler that calls a model
+            // itself cannot deadlock on the gate.
+            try await RequestGate.shared.withPermit {
+                try await gatedRespond(to: request, model: model, streamingInto: channel)
+            }
+        }
+
+        private func gatedRespond(
             to request: LanguageModelExecutorGenerationRequest,
             model: ChatCompletionsLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
@@ -573,6 +596,13 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                         .init(key: "schema", value: strictSchemaCompatible(schema.jsonSchemaDocument)),
                     ])),
                 ])))
+            }
+
+            // Caller-supplied body fields ride last so explicit routing
+            // controls (e.g. OpenRouter `provider`) reach the wire intact.
+            if let extra = configuration.additionalBodyJSON,
+               case .object(let extraMembers)? = try? JSONNode.parse(extra) {
+                members.append(contentsOf: extraMembers)
             }
 
             return .object(members)
