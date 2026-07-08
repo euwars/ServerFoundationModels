@@ -342,3 +342,22 @@ private let SOCK_STREAM_VALUE = Int32(SOCK_STREAM.rawValue)
     let second = try #require(server.lastBody)
     #expect(String(decoding: second, as: UTF8.self).contains("openrouter:web_search"))
 }
+
+@Test func jsonSchemaLooseSendsNonStrictSchema() async throws {
+    let server = try CaptureServer()
+    defer { server.stop() }
+    let model = ChatCompletionsLanguageModel(
+        name: "wire-loose",
+        url: URL(string: "http://127.0.0.1:\(server.port)")!,
+        schemaWire: .jsonSchemaLoose
+    )
+    _ = try await LanguageModelSession(model: model).respond(to: "x", generating: CraftIdea.self)
+    let body = try #require(server.lastBody)
+    let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let rf = try #require(json["response_format"] as? [String: Any])
+    #expect(rf["type"] as? String == "json_schema")
+    let js = try #require(rf["json_schema"] as? [String: Any])
+    // glm returns garbage under strict enforcement — this wire sends strict:false.
+    #expect(js["strict"] as? Bool == false)
+    #expect(js["schema"] != nil)
+}

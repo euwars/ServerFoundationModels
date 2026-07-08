@@ -30,6 +30,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// constrains via the prompt, which the session includes by default.
     public enum SchemaWire: String, Hashable, Sendable {
         case jsonSchema
+        /// json_schema with `strict: false` — some models (glm via Vercel)
+        /// emit a degenerate `{"":""}` under strict enforcement but honor the
+        /// schema correctly when it is advisory. Pair with lenient decoding.
+        case jsonSchemaLoose
         case jsonObject
     }
     public var schemaWire: SchemaWire
@@ -678,12 +682,12 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
             if let schema = request.schema, configuration.supportsGuidedGeneration {
                 switch configuration.schemaWire {
-                case .jsonSchema:
+                case .jsonSchema, .jsonSchemaLoose:
                     members.append(.init(key: "response_format", value: .object([
                         .init(key: "type", value: .string("json_schema")),
                         .init(key: "json_schema", value: .object([
                             .init(key: "name", value: .string("response")),
-                            .init(key: "strict", value: .bool(true)),
+                            .init(key: "strict", value: .bool(configuration.schemaWire == .jsonSchema)),
                             .init(key: "schema", value: strictSchemaCompatible(schema.jsonSchemaDocument)),
                         ])),
                     ])))
