@@ -32,6 +32,17 @@ public final class LanguageModelSession: @unchecked Sendable {
     /// the session that made it, instead of blurring all sessions on one model.
     public var timelineLabel: String?
 
+    /// A process-unique number for this session instance, stamped onto every
+    /// request. Because concurrent sessions can share a `timelineLabel` (each
+    /// pillar topic is its own session under one pillar label), this is what
+    /// lets a timeline tell one session apart from another — and a request
+    /// that STARTS a session apart from one that CONTINUES it.
+    public let timelineInstance = LanguageModelSession.nextTimelineInstance()
+    private static let instanceCounter = Mutex(0)
+    private static func nextTimelineInstance() -> Int {
+        instanceCounter.withLock { $0 += 1; return $0 }
+    }
+
     /// Hard cap on executor rounds per turn; only runaway tool loops hit it.
     static let maximumToolRounds = 64
 
@@ -1119,6 +1130,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             if let timelineLabel, request.metadata["timeline.session"] == nil {
                 request.metadata["timeline.session"] = timelineLabel
             }
+            request.metadata["timeline.instance"] = timelineInstance
             request.executableTools = activeTools
 
             let perform = resolved?.perform ?? self.perform

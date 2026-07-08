@@ -169,3 +169,11 @@ private struct ExcerptBriefing: DynamicInstructions {
     let snap = await RequestTimeline.shared.snapshot()
     #expect(snap.requests.contains { $0.model == "session-wire-model" && $0.session == "identity-wire" })
 }
+
+@Test func distinctSessionsGetDistinctInstances() async throws {
+    let a = LanguageModelSession(model: ScriptedModel(script: ScriptBox(rounds: [ScriptedRound(textFragments: ["x"])])))
+    let b = LanguageModelSession(model: ScriptedModel(script: ScriptBox(rounds: [ScriptedRound(textFragments: ["y"])])))
+    // Every session gets its own monotonic instance; two sessions differ.
+    #expect(a.timelineInstance != b.timelineInstance)
+    #expect(b.timelineInstance > a.timelineInstance)
+}

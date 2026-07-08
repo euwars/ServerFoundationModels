@@ -6,7 +6,7 @@ import ServerFoundationModelsTimeline
 @Suite struct TimelineReviewTests {
     func req(_ start: Double, _ total: Double, session: String = "team", gate: Double = 0, ok: Bool = true) -> ModelRequestTiming {
         ModelRequestTiming(
-            model: "m", session: session, start: .seconds(start), gateWait: .seconds(gate),
+            model: "m", session: session, sessionInstance: 0, start: .seconds(start), gateWait: .seconds(gate),
             connect: .seconds(total * 0.1), firstToken: .seconds(total * 0.6), total: .seconds(total),
             succeeded: ok, promptExcerpt: "", responseExcerpt: "", inputTokens: 1000, outputTokens: 50
         )

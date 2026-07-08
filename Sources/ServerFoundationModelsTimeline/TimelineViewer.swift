@@ -68,6 +68,7 @@ svg { display:block; }
 .bar.gemini.hollow { stroke:var(--gemini); } .bar.deepseek.hollow { stroke:var(--deepseek); }
 .bar.selected { stroke:var(--sel) !important; stroke-width:2 !important; }
 .ttftseg { fill:var(--ttft); pointer-events:none; }
+.sessionstart { fill:#a855f7; pointer-events:none; }
 .legend { display:flex; gap:16px; flex-wrap:wrap; margin:10px 0 4px; font:11px ui-monospace,Menlo,monospace; color:var(--ink2); }
 .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 .lg-gemini::before { background:var(--gemini); } .lg-deepseek::before { background:var(--deepseek); }
@@ -118,6 +119,7 @@ td.what { max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:
     <span class="lg-fetch">fetchWebpage</span><span class="lg-search">searchWeb</span>
     <span class="lg-linkedin">lookupLinkedIn</span><span class="lg-ttft">lead segment = time to first token</span>
     <span class="lg-hollow">outlined = round answered with tool calls · solid = wrote text</span>
+    <span style="color:#a855f7">▏ = a new session starts (bars right of it continue it)</span>
   </div>
   <h2>Longest spans — click to inspect</h2>
   <table id="topspans"><thead><tr><th>dur</th><th>at</th><th>lane</th><th>what</th></tr></thead><tbody></tbody></table>
@@ -138,12 +140,22 @@ const DATA = TIMELINE_DATA;
   DATA.marks.forEach(m => m.at += shift);
 }
 
+// Session boundaries: the earliest request of each session INSTANCE starts
+// that session; later ones continue it. Turn is 1-based within the instance.
+const _instTurns = {};
+for (const r of DATA.requests) { const k = r.instance || 0; (_instTurns[k] ||= []).push(r); }
+for (const k in _instTurns) _instTurns[k].sort((a, b) => a.start - b.start);
+function sessionMeta(r) {
+  const list = _instTurns[r.instance || 0] || [r];
+  const turn = list.indexOf(r) + 1;
+  return { instance: r.instance || 0, turn, turns: list.length, isStart: turn === 1 };
+}
 function reqSpan(r) {
   // A round whose entire answer was tool calls (new data records them as
   // "→ tool …"; older data left the response empty on a successful round).
   const resp = r.response || "";
   const toolRound = resp.startsWith("→") || (resp === "" && r.ok);
-  return { kind:"request", start:r.start, dur:r.total, ttft:r.firstToken, toolRound, d:r };
+  return { kind:"request", start:r.start, dur:r.total, ttft:r.firstToken, toolRound, sm:sessionMeta(r), d:r };
 }
 function toolSpans(name) {
   return DATA.tools.filter(t => t.tool === name).map(t => ({ kind:"tool", start:t.start, dur:t.duration, ttft:null, d:t }));
@@ -236,6 +248,9 @@ function render() {
       const sel = selected === id ? " selected" : "";
       const hollow = s.toolRound ? " hollow" : "";
       rects.push(`<rect class="bar ${lane.cat}${hollow}${sel}" data-id="${id}" x="${fmt(X(s.start),1)}" y="${ry}" width="${fmt(w,1)}" height="${BARH}" rx="2"/>`);
+      if (s.kind === "request" && s.sm && s.sm.isStart) {
+        rects.push(`<rect class="sessionstart" x="${fmt(X(s.start)-1.4,1)}" y="${ry-3}" width="2.4" height="${BARH+6}" rx="1"/>`);
+      }
       if (s.ttft && s.dur > 1) {
         rects.push(`<rect class="ttftseg" x="${fmt(X(s.start),1)}" y="${ry}" width="${fmt(Math.max(s.ttft*pxPerSec,1),1)}" height="${BARH}" rx="2"/>`);
       }
@@ -260,7 +275,8 @@ function attach(lanes) {
     el.addEventListener("mousemove", e => {
       const what = s.kind === "request" ? (s.d.prompt || "(no prompt)") : (s.d.input || "");
       const badge = s.kind === "request" ? (s.toolRound ? "⚙ tool-call round · " : "✎ text round · ") : "";
-      const sess = s.d.session ? esc(s.d.session)+" · " : "";
+      const sm = s.sm ? ` #${s.sm.instance}${s.sm.isStart ? " \u2b50start" : " \u00b7t"+s.sm.turn}` : "";
+      const sess = s.d.session ? esc(s.d.session)+sm+" \u00b7 " : "";
       tip.textContent = `${sess}${badge}${fmt(s.dur)}s @ ${fmt(s.start)}s — ${what.slice(0,90)}`;
       tip.style.display = "block";
       tip.style.left = Math.min(e.clientX+12, innerWidth-440)+"px";
@@ -287,7 +303,8 @@ function show(lane, s) {
       <span>tokens out</span><b>${d.tokensOut.toLocaleString()}</b>
       <span>status</span><b>${d.ok ? "ok" : "FAILED"}</b>
       <span>answered</span><b>${s.toolRound ? "tool calls" : "text"}</b>
-      <span>session</span><b>${esc(d.session||"—")}</b></div>`;
+      <span>session</span><b>${esc(d.session||"—")} #${d.instance||0}</b>
+      <span>role</span><b>${s.sm ? (s.sm.isStart ? "starts this session" : `continues (turn ${s.sm.turn}/${s.sm.turns})`) : "—"}</b></div>`;
     io = `<div class="io"><h4>prompt (head)</h4><pre>${esc(d.prompt || "—")}</pre>
       <h4>${s.toolRound ? "tool calls issued" : "response (head)"}</h4><pre>${esc(d.response || (s.toolRound ? "(recorded runs before tool-call capture show the calls in the tool lanes below)" : "—"))}</pre></div>`;
   } else {

@@ -15,6 +15,10 @@ public struct ModelRequestTiming: Sendable {
     /// and their tool calls — can be attributed to a pillar/identity/plan
     /// session instead of blurring together on one model lane. "" if unset.
     public let session: String
+    /// The process-unique instance of the session that made this request.
+    /// Concurrent sessions can share a `session` label, so this is what
+    /// separates them — and marks which request STARTS each session. 0 if unset.
+    public let sessionInstance: Int
     /// When the request started, on the timeline's clock — spans plotted
     /// against this reconstruct the run as a waterfall.
     public let start: Duration
