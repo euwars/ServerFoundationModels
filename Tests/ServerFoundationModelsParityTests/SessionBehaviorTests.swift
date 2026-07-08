@@ -598,22 +598,25 @@ struct SessionBehaviorTests {
         #expect(prompt.contextOptions.reasoningLevel == .deep)
     }
 
-    @Test("unregistered tool call throws ToolCallError, not a transport error")
-    func unregisteredToolThrowsToolCallError() async throws {
+    @Test("unregistered tool call is fed back for self-correction, not thrown")
+    func unregisteredToolIsFedBackForSelfCorrection() async throws {
+        // A hallucinated tool name is the model's mistake, not a fatal error:
+        // the loop feeds back an error output and continues so the model can
+        // pick a real tool, rather than crashing the whole session.
         let script = ScriptBox(rounds: [
             ScriptedRound(toolCalls: [
                 ScriptedToolCall(id: "c1", name: "missingTool", argumentsJSON: "{}"),
             ]),
+            ScriptedRound(textFragments: ["done"]),
         ])
         let session = LanguageModelSession(model: ScriptedModel(script: script))
-
-        do {
-            _ = try await session.respond(to: "go")
-            Issue.record("expected ToolCallError")
-        } catch let error as LanguageModelSession.ToolCallError {
-            #expect(error.tool.name == "missingTool")
-            #expect(!(error.underlyingError is LanguageModelTransportError))
+        let response = try await session.respond(to: "go")
+        #expect(response.content == "done")
+        let outputs = session.transcript.compactMap { entry -> String? in
+            guard case .toolOutput(let o) = entry else { return nil }
+            return o.segments.compactMap { if case .text(let t) = $0 { return t.content }; return nil }.joined()
         }
+        #expect(outputs.contains { $0.contains("no tool named 'missingTool'") })
     }
 
     @Test("reasoning signature from updateSignature lands in the transcript")

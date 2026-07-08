@@ -263,3 +263,15 @@ struct JSONRobustnessTests {
         #expect(reparsed == original)
     }
 }
+
+@Test func truncatedFindingsArraySalvagesCompleteEntries() throws {
+    // deepseek-pro cut off mid-array at the token cap. The complete findings
+    // before the cut must survive instead of the whole decode throwing.
+    let truncated = #"{"findings":[{"observed":"first","verdict":"verified"},{"observed":"second","verdict":"contradicted"},"#
+    let content = try GeneratedContent(salvagingJSON: truncated)
+    let findings = try content.value([GeneratedContent].self, forProperty: "findings")
+    #expect(findings.count == 2)
+    #expect(try findings[0].value(String.self, forProperty: "observed") == "first")
+    #expect(try findings[1].value(String.self, forProperty: "verdict") == "contradicted")
+    #expect(content.isComplete == false)  // flagged as recovered, not clean
+}

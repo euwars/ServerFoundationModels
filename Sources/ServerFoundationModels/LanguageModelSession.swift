@@ -359,7 +359,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                 contextOptions: contextOptions, metadata: metadata,
                 onCumulativeText: nil
             )
-            let content = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+            let content = try GeneratedContent(salvagingJSON: Self.stripCodeFences(from: result.finalRoundText))
 
             let responseEntry = Transcript.Response(
                 metadata: result.usage.metadata,
@@ -433,7 +433,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             let raw: GeneratedContent
             let content: Content
             do {
-                raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+                raw = try GeneratedContent(salvagingJSON: Self.stripCodeFences(from: result.finalRoundText))
                 content = try Content(raw)
             } catch {
                 throw GenerationError.decodingFailure(.init(
@@ -584,7 +584,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     let raw: GeneratedContent
                     let final: Content.PartiallyGenerated
                     do {
-                        raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+                        raw = try GeneratedContent(salvagingJSON: Self.stripCodeFences(from: result.finalRoundText))
                         final = try Content.PartiallyGenerated(raw)
                     } catch {
                         throw GenerationError.decodingFailure(.init(
@@ -807,7 +807,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                             ))
                         }
                     }
-                    let raw = try GeneratedContent(json: Self.stripCodeFences(from: result.finalRoundText))
+                    let raw = try GeneratedContent(salvagingJSON: Self.stripCodeFences(from: result.finalRoundText))
                     let responseEntry = Transcript.Response(
                         metadata: result.usage.metadata,
                         segments: transcriptResponseSegments(

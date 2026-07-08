@@ -37,6 +37,30 @@ public struct GeneratedContent: Sendable, Equatable, CustomDebugStringConvertibl
         self.generationID = nil
     }
 
+    /// Like `init(json:)` but salvages the valid prefix of a model response
+    /// that was cut off at the token cap or lightly malformed — a truncated
+    /// array of findings yields the complete ones instead of throwing the
+    /// whole batch away. Used ONLY for decoding a model's structured output,
+    /// never for tool arguments (which stay strict). Falls back to the strict
+    /// error when nothing is recoverable; flags the result incomplete.
+    init(salvagingJSON json: String) throws {
+        do {
+            self.node = try JSONNode.parse(json)
+            self.complete = true
+        } catch {
+            guard let recovered = JSONNode.parseLenient(json) else {
+                throw ParsingError(
+                    rawContent: json,
+                    underlyingError: error,
+                    debugDescription: "invalid JSON: \(error)"
+                )
+            }
+            self.node = recovered
+            self.complete = false
+        }
+        self.generationID = nil
+    }
+
     public init(properties: KeyValuePairs<String, any ConvertibleToGeneratedContent>, id: GenerationID? = nil) {
         let members = properties.map { key, value in
             JSONNode.Member(key: key, value: value.generatedContent.node)
