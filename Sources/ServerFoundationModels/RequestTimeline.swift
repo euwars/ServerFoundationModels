@@ -38,6 +38,27 @@ public struct ModelRequestTiming: Sendable {
     public let responseExcerpt: String
     public let inputTokens: Int
     public let outputTokens: Int
+
+    package init(
+        model: String, session: String, sessionInstance: Int, start: Duration,
+        gateWait: Duration, connect: Duration, firstToken: Duration, total: Duration,
+        succeeded: Bool, promptExcerpt: String, responseExcerpt: String,
+        inputTokens: Int, outputTokens: Int
+    ) {
+        self.model = model
+        self.session = session
+        self.sessionInstance = sessionInstance
+        self.start = start
+        self.gateWait = gateWait
+        self.connect = connect
+        self.firstToken = firstToken
+        self.total = total
+        self.succeeded = succeeded
+        self.promptExcerpt = promptExcerpt
+        self.responseExcerpt = responseExcerpt
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+    }
 }
 
 /// One tool execution inside a session's tool-call loop.
@@ -76,17 +97,18 @@ public actor RequestTimeline {
     private var toolRuns: [ToolRunTiming] = []
     private var marks: [TimelineMark] = []
 
-    /// Now, on the timeline's clock.
-    nonisolated func offset(of instant: ContinuousClock.Instant = ContinuousClock().now) -> Duration {
+    /// Now, on the timeline's clock. `package` so the utilities target's
+    /// providers can plot their spans against the same epoch.
+    package nonisolated func offset(of instant: ContinuousClock.Instant = ContinuousClock().now) -> Duration {
         instant - epoch
     }
 
-    func record(_ timing: ModelRequestTiming) {
+    package func record(_ timing: ModelRequestTiming) {
         requests.append(timing)
         if requests.count > Self.capacity { requests.removeFirst(requests.count - Self.capacity) }
     }
 
-    func record(_ timing: ToolRunTiming) {
+    package func record(_ timing: ToolRunTiming) {
         toolRuns.append(timing)
         if toolRuns.count > Self.capacity { toolRuns.removeFirst(toolRuns.count - Self.capacity) }
     }
@@ -107,8 +129,17 @@ public actor RequestTimeline {
         body: () async throws -> T
     ) async rethrows -> T {
         let started = ContinuousClock().now
+        #if canImport(os)
+        let signpost = FMSignpost.tool
+        let interval = signpost.beginInterval(
+            "tool", id: signpost.makeSignpostID(),
+            "tool=\(tool, privacy: .public) session=\(session, privacy: .public)")
+        #endif
         do {
             let result = try await body()
+            #if canImport(os)
+            signpost.endInterval("tool", interval)
+            #endif
             await record(ToolRunTiming(
                 tool: tool, session: session, start: offset(of: started),
                 duration: ContinuousClock().now - started,
@@ -117,6 +148,9 @@ public actor RequestTimeline {
             ))
             return result
         } catch {
+            #if canImport(os)
+            signpost.endInterval("tool", interval)
+            #endif
             await record(ToolRunTiming(
                 tool: tool, session: session, start: offset(of: started),
                 duration: ContinuousClock().now - started,
@@ -135,21 +169,5 @@ public actor RequestTimeline {
         requests = []
         toolRuns = []
         marks = []
-    }
-}
-
-/// Same-task scratchpad the executor fills in while streaming; not Sendable
-/// on purpose — it never leaves the request's task.
-final class RequestTimingBox {
-    var connectAt: ContinuousClock.Instant?
-    var firstEventAt: ContinuousClock.Instant?
-    var responseExcerpt = ""
-    var inputTokens = 0
-    var outputTokens = 0
-
-    func appendResponse(_ text: String) {
-        guard responseExcerpt.utf8.count < 600 else { return }
-        responseExcerpt += text
-        if responseExcerpt.count > 600 { responseExcerpt = String(responseExcerpt.prefix(600)) }
     }
 }

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Custom Instruments 27 package that renders the os_signpost intervals emitted
+  by ServerFoundationModels (see Sources/ServerFoundationModels/Profiling.swift)
+  as a Foundation Models events timeline: one lane of model requests (with
+  time-to-first-token and token counts) and one lane of tool runs.
+
+  The subsystem/category/name strings below MUST match FMSignpost exactly.
+
+  To use it: add this file to an Xcode "Instruments Package" target and build,
+  or embed it in your app target's Copy Files / Instruments Package build phase.
+  Even without this package, the intervals show up under Instruments' built-in
+  "os_signpost" instrument (subsystem com.serverfoundationmodels).
+-->
+<package>
+    <id>com.serverfoundationmodels.instruments</id>
+    <title>Server Foundation Models</title>
+    <owner>
+        <name>ServerFoundationModels</name>
+    </owner>
+
+    <!-- ===== Model request intervals ===== -->
+    <os-signpost-interval-schema>
+        <id>sfm-model-request</id>
+        <title>FM Model Request</title>
+        <subsystem>"com.serverfoundationmodels"</subsystem>
+        <category>"ModelRequest"</category>
+        <name>"request"</name>
+
+        <start-pattern>
+            <message>"model=" ?model " session=" ?session</message>
+        </start-pattern>
+        <end-pattern>
+            <message>"ttft_ms=" ?ttft " in=" ?input-tokens " out=" ?output-tokens " ok=" ?ok</message>
+        </end-pattern>
+
+        <column>
+            <mnemonic>model</mnemonic>
+            <title>Model</title>
+            <type>string</type>
+            <expression>?model</expression>
+        </column>
+        <column>
+            <mnemonic>session</mnemonic>
+            <title>Session</title>
+            <type>string</type>
+            <expression>?session</expression>
+        </column>
+        <column>
+            <mnemonic>ttft</mnemonic>
+            <title>Time to First Token (ms)</title>
+            <type>uint64</type>
+            <expression>?ttft</expression>
+        </column>
+        <column>
+            <mnemonic>input-tokens</mnemonic>
+            <title>Input Tokens</title>
+            <type>uint64</type>
+            <expression>?input-tokens</expression>
+        </column>
+        <column>
+            <mnemonic>output-tokens</mnemonic>
+            <title>Output Tokens</title>
+            <type>uint64</type>
+            <expression>?output-tokens</expression>
+        </column>
+        <column>
+            <mnemonic>ok</mnemonic>
+            <title>Succeeded</title>
+            <type>uint64</type>
+            <expression>?ok</expression>
+        </column>
+    </os-signpost-interval-schema>
+
+    <!-- ===== Tool run intervals ===== -->
+    <os-signpost-interval-schema>
+        <id>sfm-tool-run</id>
+        <title>FM Tool Run</title>
+        <subsystem>"com.serverfoundationmodels"</subsystem>
+        <category>"ToolRun"</category>
+        <name>"tool"</name>
+
+        <start-pattern>
+            <message>"tool=" ?tool " session=" ?session</message>
+        </start-pattern>
+
+        <column>
+            <mnemonic>tool</mnemonic>
+            <title>Tool</title>
+            <type>string</type>
+            <expression>?tool</expression>
+        </column>
+        <column>
+            <mnemonic>session</mnemonic>
+            <title>Session</title>
+            <type>string</type>
+            <expression>?session</expression>
+        </column>
+    </os-signpost-interval-schema>
+
+    <!-- ===== Instrument ===== -->
+    <instrument>
+        <id>com.serverfoundationmodels.instrument</id>
+        <title>Foundation Models (Server)</title>
+        <category>Behavior</category>
+        <purpose>Model requests and tool runs issued by ServerFoundationModels: request latency, time-to-first-token, token counts, and tool spans.</purpose>
+        <icon>Network</icon>
+
+        <create-table>
+            <id>requests-table</id>
+            <schema-ref>sfm-model-request</schema-ref>
+        </create-table>
+        <create-table>
+            <id>tools-table</id>
+            <schema-ref>sfm-tool-run</schema-ref>
+        </create-table>
+
+        <graph>
+            <title>Foundation Models</title>
+            <lane>
+                <title>Model Requests</title>
+                <table-ref>requests-table</table-ref>
+                <plot>
+                    <value-from>duration</value-from>
+                    <label-from>model</label-from>
+                </plot>
+            </lane>
+            <lane>
+                <title>Tool Runs</title>
+                <table-ref>tools-table</table-ref>
+                <plot>
+                    <value-from>duration</value-from>
+                    <label-from>tool</label-from>
+                </plot>
+            </lane>
+        </graph>
+
+        <list>
+            <title>Model Requests</title>
+            <table-ref>requests-table</table-ref>
+            <column>start</column>
+            <column>duration</column>
+            <column>model</column>
+            <column>session</column>
+            <column>ttft</column>
+            <column>input-tokens</column>
+            <column>output-tokens</column>
+            <column>ok</column>
+        </list>
+        <list>
+            <title>Tool Runs</title>
+            <table-ref>tools-table</table-ref>
+            <column>start</column>
+            <column>duration</column>
+            <column>tool</column>
+            <column>session</column>
+        </list>
+    </instrument>
+</package>

@@ -38,15 +38,32 @@ API, verified signature-for-signature against Apple's interface.
 .package(url: "https://github.com/euwars/ServerFoundationModels.git", from: "0.1.0")
 ```
 
-For a zero-line switch, alias the module so even the import stays untouched:
+Two library products, mirroring how Apple ships `FoundationModels` and
+`FoundationModelsUtilities` as separate frameworks:
 
 ```swift
-.product(name: "ServerFoundationModels", package: "ServerFoundationModels",
-         moduleAliases: ["ServerFoundationModels": "FoundationModels"])
+.target(name: "App", dependencies: [
+    // Core SDK surface: sessions, @Generable, tools, transcripts, profiles,
+    // the native xAI provider.
+    .product(name: "ServerFoundationModels", package: "ServerFoundationModels"),
+    // apple/foundation-models-utilities surface: the Chat-Completions provider
+    // (Ollama / OpenRouter / vLLM / …) and Skills. Import only if you use them.
+    .product(name: "ServerFoundationModelsUtilities", package: "ServerFoundationModels"),
+])
 ```
 
 The NIO transport (swift-nio + async-http-client) is the default. For a
 dependency-light build on URLSession, opt out with `traits: []`.
+
+> **Note — module aliasing.** A `moduleAliases: ["ServerFoundationModels":
+> "FoundationModels"]` "zero-line switch" does **not** work: this package's own
+> `SystemLanguageModel` does `import FoundationModels` for the Apple on-device
+> bridge, and Swift forbids that name inside a package aliased *to*
+> `FoundationModels` (even in inactive `#if` branches). To make a package
+> written against Apple's `FoundationModels` build on this stack, swap its
+> `import FoundationModels` line for `import ServerFoundationModels` — see
+> [`forks/ClaudeForFoundationModels`](forks/ClaudeForFoundationModels) for a
+> worked example.
 
 ## Quick start
 
@@ -56,6 +73,7 @@ Apple's on-device model doesn't exist off Apple platforms, so the built-in
 
 ```swift
 import ServerFoundationModels
+import ServerFoundationModelsUtilities   // ChatCompletionsLanguageModel lives here
 
 let model = ChatCompletionsLanguageModel(
     name: "qwen3.5:9b",
@@ -295,14 +313,53 @@ var model = XAILanguageModel(name: .grok4_3, auth: .apiKey(key))
 model.logger = Logger(label: "xai")
 ```
 
+## OpenRouter
+
+`OpenRouterLanguageModel` is a first-class OpenRouter provider (in
+`ServerFoundationModelsUtilities`). OpenRouter speaks the OpenAI
+`/chat/completions` wire, so it reuses that proven engine — streaming, tool
+calls, usage, and `url_citation` → `WebCitationSegment` all work — while giving
+you typed access to the OpenRouter-specific surface a real pipeline depends on:
+
+```swift
+import ServerFoundationModels
+import ServerFoundationModelsUtilities
+
+let model = OpenRouterLanguageModel(
+    model: "anthropic/claude-sonnet-4",
+    apiKey: key,                                   // Bearer; prefer Keychain over the binary
+    providerRouting: .init(order: ["anthropic", "google-vertex"],
+                           allowFallbacks: false), // pin backends so a run can't drift
+    serverTools: [.webSearch(engine: .native)],    // "native", not auto (auto silently falls back to Exa)
+    reasoning: .init(effort: .high),
+    appURL: "https://myapp.example", appTitle: "My App")   // OpenRouter attribution
+
+let session = LanguageModelSession(model: model)
+let answer = try await session.respond(to: "What shipped in Swift 6.2?")
+```
+
+- **Provider routing** (`order`/`only`/`ignore`/`allowFallbacks`/`sort`/…) is
+  typed and lands in the request's `provider` object.
+- **`reasoning`** (`effort`/`maxTokens`/`enabled`/`exclude`) is typed too;
+  `extraBodyJSON` merges verbatim for anything not modelled (and overrides the
+  typed fields on key collision).
+- **Credit exhaustion** (HTTP 402, or 403 whose body says "key limit"/"credit")
+  is terminal — it surfaces as `OpenRouterError.creditExhausted` so a fan-out
+  run stops and says "add credit" instead of each worker re-discovering the dead
+  key. Rate limits still map to `LanguageModelError.rateLimited` (honoring
+  `Retry-After`), context overflow to `.contextSizeExceeded`.
+
 ## Skills
 
 Give the model capability bundles it can turn on and off *itself*. A `Skill`
 pairs a model-visible name and description with an instructions-and-tools payload
 (or a one-shot prompt). `Skills` lists them and generates a tool the model calls
-to toggle them — so the model reconfigures itself mid-session.
+to toggle them — so the model reconfigures itself mid-session. `Skill`/`Skills`
+live in `ServerFoundationModelsUtilities`:
 
 ```swift
+import ServerFoundationModelsUtilities
+
 struct AssistantProfile: LanguageModelSession.DynamicProfile {
     let activations: SkillActivations
     let key: String
@@ -357,6 +414,28 @@ TOTAL:                       95.9s   (1 plan + 4 research + 4 verify + 1 synth)
 Each stage tunes its own model and reasoning effort (wide + cheap to gather,
 deep + skeptical to trust), passes typed `@Generable` data between stages, and
 pipelines research → verify per angle so a slow verify never blocks the others.
+
+## Profiling with Instruments (Xcode 27)
+
+Every model request and tool run is emitted as an [`os_signpost`](https://developer.apple.com/documentation/os/ossignposter)
+interval (subsystem `com.serverfoundationmodels`), so you can profile a run on a
+Foundation Models **events timeline** — request latency, time-to-first-token,
+token counts, and tool spans — the same way you'd profile Apple's on-device
+model. Both `XAILanguageModel` and `ChatCompletionsLanguageModel` are
+instrumented. They show up in Instruments' built-in **os_signpost** instrument;
+a custom package that renders them as labelled lanes ships in
+[`Instruments/ServerFoundationModels.instrpkg`](Instruments/). Emission compiles
+to nothing off Apple platforms. See [`Instruments/README.md`](Instruments/README.md).
+
+## Using packages written for Apple's FoundationModels
+
+A provider package built against Apple's `FoundationModels` (e.g.
+[anthropics/ClaudeForFoundationModels](https://github.com/anthropics/ClaudeForFoundationModels))
+runs on this stack with a one-line-per-file change: swap `import FoundationModels`
+for `import ServerFoundationModels`. Our surface is signature-compatible, so the
+bridge, executor, and its own tests compile unmodified.
+[`forks/ClaudeForFoundationModels`](forks/ClaudeForFoundationModels) is a worked,
+tested fork — every `.swift` source is upstream's, changed only at the import line.
 
 ## How parity is proven
 

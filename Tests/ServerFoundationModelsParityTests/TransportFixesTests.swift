@@ -12,6 +12,7 @@ import Foundation
 import Logging
 import Testing
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -122,7 +123,16 @@ struct TransportFixesTests {
     func toolCallingModeMapping() async throws {
         let server = try CaptureServer()
         defer { server.stop() }
-        let session = makeSession(port: server.port)
+        // `tool_choice` only rides the wire when the request actually carries
+        // tools — some providers (xAI) reject a tool_choice against an empty
+        // tools array — so give the session a tool to exercise the mapping.
+        let session = LanguageModelSession(
+            model: ChatCompletionsLanguageModel(
+                name: "wire-model",
+                url: URL(string: "http://127.0.0.1:\(server.port)")!
+            ),
+            tools: [ThermometerTool(recorder: CallRecorder())]
+        )
 
         func wiredToolChoice(_ mode: GenerationOptions.ToolCallingMode) async throws -> String? {
             _ = try await session.respond(to: "hi", options: GenerationOptions(toolCallingMode: mode))

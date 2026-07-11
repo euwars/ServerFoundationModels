@@ -1,6 +1,7 @@
 // Smoke test: ServerFoundationModels inside a Vapor request handler.
 import Vapor
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 func makeSession() -> LanguageModelSession {
     if let apiKey = ProcessInfo.processInfo.environment["XAI_API_KEY"] {

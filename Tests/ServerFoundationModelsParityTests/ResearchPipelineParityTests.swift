@@ -9,6 +9,7 @@
 import Foundation
 import Testing
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 private struct PipelineProbeTool: Tool {
     let recorder: BehaviorRecorder
@@ -95,7 +96,7 @@ private struct PillarBriefing: DynamicInstructions {
     // The briefing prose is the system message.
     let messages = try #require(json["messages"] as? [[String: Any]])
     #expect(messages.first?["role"] as? String == "system")
-    #expect((messages.first?["content"] as? String)?.contains("research analyst") == true)
+    #expect(messageText(messages.first)?.contains("research analyst") == true)
 }
 
 // MARK: - History-carried restart

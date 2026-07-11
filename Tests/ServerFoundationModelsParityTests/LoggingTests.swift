@@ -6,6 +6,7 @@ import Foundation
 import Logging
 import Testing
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking

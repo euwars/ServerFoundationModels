@@ -17,6 +17,11 @@ let package = Package(
     ],
     products: [
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
+        // Apple's foundation-models-utilities surface (Skills, the
+        // Chat-Completions provider) as its own module, layered on top of the
+        // core — mirroring how Apple ships FoundationModels and
+        // FoundationModelsUtilities as separate frameworks.
+        .library(name: "ServerFoundationModelsUtilities", targets: ["ServerFoundationModelsUtilities"]),
         .library(name: "ServerFoundationModelsTimeline", targets: ["ServerFoundationModelsTimeline"]),
         .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
         .executable(name: "XAIServerToolsProbe", targets: ["XAIServerToolsProbe"]),
@@ -49,6 +54,14 @@ let package = Package(
                     package: "async-http-client",
                     condition: .when(traits: ["AsyncHTTPClient"])
                 ),
+            ],
+            swiftSettings: concurrencySettings
+        ),
+        .target(
+            name: "ServerFoundationModelsUtilities",
+            dependencies: [
+                "ServerFoundationModels",
+                .product(name: "Logging", package: "swift-log"),
             ],
             swiftSettings: concurrencySettings
         ),
@@ -118,6 +131,7 @@ let package = Package(
             name: "ServerFoundationModelsParityTests",
             dependencies: [
                 "ServerFoundationModels",
+                "ServerFoundationModelsUtilities",
                 "ServerFoundationModelsTimeline",
                 .product(name: "Logging", package: "swift-log"),
             ],

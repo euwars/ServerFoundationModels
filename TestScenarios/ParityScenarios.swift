@@ -20,8 +20,10 @@ import Testing
 
 #if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 #elseif canImport(FoundationModels)
 import FoundationModels
+import FoundationModelsUtilities
 #endif
 
 #if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS || canImport(FoundationModels)

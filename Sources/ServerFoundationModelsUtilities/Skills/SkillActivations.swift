@@ -3,6 +3,7 @@
 
 import Foundation
 import Synchronization
+import ServerFoundationModels
 
 /// A collection of active skill identifiers that tracks which skills have been
 /// activated during a language model session.

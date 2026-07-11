@@ -3,6 +3,7 @@
 // adapted to ServerFoundationModels.
 
 import Foundation
+import ServerFoundationModels
 
 /// A capability that can be offered to a language model session, allowing the
 /// model to activate specialized behavior on demand.

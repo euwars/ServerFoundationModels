@@ -5,12 +5,12 @@
 import Foundation
 
 /// Shared provider-agnostic heuristics for classifying HTTP model-server errors.
-enum HTTPErrorHeuristics {
+package enum HTTPErrorHeuristics {
     /// RFC 7231 Retry-After: delta-seconds or HTTP-date. Returns nil if unparseable.
     ///
     /// Feeds `LanguageModelError.rateLimited.resetDate` (session:
     /// `LanguageModelSession.GenerationError.rateLimited`).
-    static func retryAfterDate(fromHeaderValue value: String, now: Date = Date()) -> Date? {
+    package static func retryAfterDate(fromHeaderValue value: String, now: Date = Date()) -> Date? {
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         if let seconds = Double(trimmed) {
             return now.addingTimeInterval(seconds)
@@ -27,11 +27,22 @@ enum HTTPErrorHeuristics {
     /// Providers commonly report this as HTTP 400/413; maps to
     /// `LanguageModelError.contextSizeExceeded` (session:
     /// `LanguageModelSession.GenerationError.exceededContextWindowSize`).
-    static func isContextOverflow(statusCode: Int, body: String) -> Bool {
+    package static func isContextOverflow(statusCode: Int, body: String) -> Bool {
         let lowered = body.lowercased()
         return [400, 413].contains(statusCode)
             && (lowered.contains("context") || lowered.contains("maximum length"))
             && (lowered.contains("token") || lowered.contains("length") || lowered.contains("window"))
+    }
+
+    /// True when statusCode/body indicate the account is out of credit / over
+    /// its key limit — a terminal condition that fails every later request
+    /// identically, so callers should stop rather than retry. OpenRouter's
+    /// observed shapes: HTTP 402, or 403 whose body says "key limit"/"credit".
+    package static func isCreditExhaustion(statusCode: Int, body: String) -> Bool {
+        if statusCode == 402 { return true }
+        guard statusCode == 403 else { return false }
+        let lowered = body.lowercased()
+        return lowered.contains("key limit") || lowered.contains("credit")
     }
 }
 

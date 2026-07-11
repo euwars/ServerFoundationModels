@@ -1,5 +1,7 @@
 // Process-global cap on concurrent in-flight model HTTP requests.
 
+import ServerFoundationModels
+
 /// Bounds how many chat-completions requests are in flight at once, across
 /// every session and model in the process. Off by default.
 ///

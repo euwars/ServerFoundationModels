@@ -317,7 +317,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public typealias Index = Int
 
         public var id: String
-        var calls: [ToolCall]
+        package var calls: [ToolCall]
 
         public init<S: Sequence>(id: String = UUID().uuidString, _ calls: S) where S.Element == ToolCall {
             self.id = id
@@ -468,7 +468,7 @@ private func erasedEqual(_ lhs: any Equatable, _ rhs: any Equatable) -> Bool {
 }
 
 extension [Transcript.Segment] {
-    var joinedText: String {
+    package var joinedText: String {
         compactMap { segment in
             switch segment {
             case .text(let text): return text.content

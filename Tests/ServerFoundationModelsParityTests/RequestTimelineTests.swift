@@ -2,6 +2,7 @@ import Foundation
 import ServerFoundationModelsTimeline
 import Testing
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 // The shared timeline accumulates across parallel tests — filter by names
 // unique to each test instead of resetting.

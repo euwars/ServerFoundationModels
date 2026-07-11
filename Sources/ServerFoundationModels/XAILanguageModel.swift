@@ -82,6 +82,14 @@ public struct XAILanguageModel: Sendable, LanguageModel {
             let logger = model.logger
             updateStateBeforeRequest(transcript: request.transcript, state: model.conversationState)
 
+            #if canImport(os)
+            let session = (request.metadata["timeline.session"] as? String) ?? ""
+            let signpost = FMSignpost.request
+            let signpostID = signpost.makeSignpostID()
+            let interval = signpost.beginInterval(
+                "request", id: signpostID,
+                "model=\(configuration.model.id, privacy: .public) session=\(session, privacy: .public)")
+            #endif
             do {
                 try await execute(
                     request: request,
@@ -90,8 +98,19 @@ public struct XAILanguageModel: Sendable, LanguageModel {
                     allowThreadingFallback: true,
                     logger: logger
                 )
+                #if canImport(os)
+                signpost.endInterval("request", interval, "ok=\(1, privacy: .public)")
+                #endif
             } catch let error as XAIError {
+                #if canImport(os)
+                signpost.endInterval("request", interval, "ok=\(0, privacy: .public)")
+                #endif
                 throw XAIErrorMapper.map(error)
+            } catch {
+                #if canImport(os)
+                signpost.endInterval("request", interval, "ok=\(0, privacy: .public)")
+                #endif
+                throw error
             }
         }
 

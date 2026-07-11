@@ -9,6 +9,7 @@
 import Foundation
 import Testing
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -54,9 +55,9 @@ struct WireCaptureTests {
         // Instructions become the system message, verbatim.
         let messages = try #require(json["messages"] as? [[String: Any]])
         #expect(messages.first?["role"] as? String == "system")
-        #expect(messages.first?["content"] as? String == "You are the wire-capture assistant.")
+        #expect(messageText(messages.first) == "You are the wire-capture assistant.")
         #expect(messages.last?["role"] as? String == "user")
-        #expect(messages.last?["content"] as? String == "Suggest a craft idea.")
+        #expect(messageText(messages.last) == "Suggest a craft idea.")
 
         // Tool definitions carry their parameter schemas.
         let tools = try #require(json["tools"] as? [[String: Any]])

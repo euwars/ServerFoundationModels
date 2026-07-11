@@ -5,6 +5,7 @@
 // `url_citation` annotations come back in the same streamed response.
 
 import Foundation
+import ServerFoundationModels
 
 public struct ChatCompletionsServerTool: Sendable, Hashable {
     /// The serialized tool object, e.g. `{"type":"openrouter:web_search"}`.

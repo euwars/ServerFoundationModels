@@ -4,10 +4,15 @@
 
 import Foundation
 
-indirect enum JSONNode: Sendable, Equatable {
-    struct Member: Sendable, Equatable {
-        var key: String
-        var value: JSONNode
+package indirect enum JSONNode: Sendable, Equatable {
+    package struct Member: Sendable, Equatable {
+        package var key: String
+        package var value: JSONNode
+
+        package init(key: String, value: JSONNode) {
+            self.key = key
+            self.value = value
+        }
     }
 
     case null
@@ -27,7 +32,7 @@ extension JSONNode {
         var description: String { "JSON parse error: \(reason)" }
     }
 
-    static func parse(_ text: String) throws -> JSONNode {
+    package static func parse(_ text: String) throws -> JSONNode {
         var parser = Parser(scalars: Array(text.unicodeScalars))
         let value = try parser.parseValue()
         parser.skipWhitespace()
@@ -229,7 +234,7 @@ private extension Unicode.Scalar {
 // MARK: - Serialization
 
 extension JSONNode {
-    var serialized: String {
+    package var serialized: String {
         switch self {
         case .null:
             return "null"

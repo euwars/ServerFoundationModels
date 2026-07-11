@@ -1367,7 +1367,16 @@ public final class LanguageModelSession: @unchecked Sendable {
                     group.addTask {
                         let toolStarted = ContinuousClock().now
                         let input = String(entry.call.arguments.jsonString.prefix(400))
+                        #if canImport(os)
+                        let signpost = FMSignpost.tool
+                        let interval = signpost.beginInterval(
+                            "tool", id: signpost.makeSignpostID(),
+                            "tool=\(entry.call.toolName, privacy: .public) session=\(sessionLabel, privacy: .public)")
+                        #endif
                         func recordRun(_ out: String) async {
+                            #if canImport(os)
+                            signpost.endInterval("tool", interval)
+                            #endif
                             await RequestTimeline.shared.record(ToolRunTiming(
                                 tool: entry.call.toolName, session: sessionLabel,
                                 start: RequestTimeline.shared.offset(of: toolStarted),

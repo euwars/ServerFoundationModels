@@ -1,6 +1,8 @@
 // Result builder for `Skills { ... }`. Ported from
 // apple/foundation-models-utilities, adapted to ServerFoundationModels.
 
+import ServerFoundationModels
+
 @resultBuilder
 public struct SkillsBuilder {
     public static func buildBlock(_ components: [Skill]...) -> [Skill] {

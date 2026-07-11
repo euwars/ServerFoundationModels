@@ -120,6 +120,14 @@ public struct LanguageModelCapabilities: Sendable {
         self.capabilities = Set(capabilities)
     }
 
+    /// Unlabeled convenience matching Apple's shipping initializer
+    /// (`LanguageModelCapabilities([.toolCalling, ...])`) — used by providers
+    /// such as ClaudeForFoundationModels. The reference `.swiftinterface`
+    /// only lists the labeled form, but the shipping SDK accepts both.
+    public init(_ capabilities: [Capability]) {
+        self.capabilities = Set(capabilities)
+    }
+
     public func contains(_ capability: Capability) -> Bool {
         capabilities.contains(capability)
     }

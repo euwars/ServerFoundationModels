@@ -1,5 +1,6 @@
 import Testing
 @testable import ServerFoundationModels
+@testable import ServerFoundationModelsUtilities
 
 private actor GateProbe {
     var current = 0

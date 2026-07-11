@@ -13,6 +13,7 @@ let package = Package(
             name: "HummingbirdSmoke",
             dependencies: [
                 .product(name: "ServerFoundationModels", package: "ServerFoundationModels"),
+                .product(name: "ServerFoundationModelsUtilities", package: "ServerFoundationModels"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ]
         )

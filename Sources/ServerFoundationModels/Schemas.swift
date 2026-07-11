@@ -7,8 +7,8 @@
 
 import Foundation
 
-indirect enum SchemaNode: Sendable, Equatable {
-    struct Property: Sendable, Equatable {
+package indirect enum SchemaNode: Sendable, Equatable {
+    package struct Property: Sendable, Equatable {
         var name: String
         var description: String?
         var node: SchemaNode
@@ -421,7 +421,7 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
         self.dependencies = []
     }
 
-    init(node: SchemaNode) {
+    package init(node: SchemaNode) {
         self.root = node
         self.dependencies = []
     }
@@ -536,7 +536,7 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
     /// dependency schemas, referenced type definitions are hoisted into
     /// `$defs` (from the root and from dependencies, transitively) so every
     /// `$ref` resolves.
-    var jsonSchemaDocument: JSONNode {
+    package var jsonSchemaDocument: JSONNode {
         var references: Set<String> = []
         root.collectReferences(into: &references)
         guard !references.isEmpty else { return root.jsonSchema }
@@ -654,7 +654,7 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
 // MARK: - DynamicGenerationSchema
 
 public struct DynamicGenerationSchema: Sendable {
-    let node: SchemaNode
+    package let node: SchemaNode
 
     public init(name: String, description: String? = nil, properties: [Property]) {
         self.node = .object(

@@ -1,5 +1,6 @@
 import Foundation
 @testable import ServerFoundationModels
+@testable import ServerFoundationModelsUtilities
 import Testing
 
 @Suite struct SkillsTests {

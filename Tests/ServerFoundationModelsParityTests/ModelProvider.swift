@@ -12,9 +12,24 @@
 
 import Foundation
 import ServerFoundationModels
+import ServerFoundationModelsUtilities
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+
+/// Extracts a chat message's text whether `content` rides the wire as a plain
+/// string or as an array of typed parts — the latter being how prompt-cache
+/// breakpoints wrap it (`[{"type":"text","text":…,"cache_control":…}]`).
+/// Tests assert the semantic content, not the transport encoding.
+func messageText(_ message: [String: Any]?) -> String? {
+    guard let content = message?["content"] else { return nil }
+    if let string = content as? String { return string }
+    if let parts = content as? [[String: Any]] {
+        let text = parts.compactMap { $0["text"] as? String }.joined()
+        return text.isEmpty ? nil : text
+    }
+    return nil
+}
 
 enum ParityModel {
     static let useChatCompletions =
