@@ -90,7 +90,11 @@ public struct OpenRouterLanguageModel: Sendable, LanguageModel {
     /// Lowers the typed OpenRouter configuration onto the OpenAI-compatible
     /// engine: auth + attribution headers, `provider`/`reasoning`/extra merged
     /// into the request body, and typed server tools rendered to wire form.
-    func asChatCompletions() -> ChatCompletionsLanguageModel {
+    ///
+    /// `reasoningLevel` is the per-request Apple control
+    /// (`ContextOptions(reasoningLevel:)` / `.reasoningLevel(.deep)`); when set
+    /// it overrides the model's construction-time `reasoning` default.
+    func asChatCompletions(reasoningLevel: ContextOptions.ReasoningLevel? = nil) -> ChatCompletionsLanguageModel {
         var headers = additionalHeaders
         if let apiKey { headers["Authorization"] = "Bearer \(apiKey)" }
         if let appURL { headers["HTTP-Referer"] = appURL }
@@ -104,18 +108,36 @@ public struct OpenRouterLanguageModel: Sendable, LanguageModel {
             serverTools: serverTools.map(\.underlying),
             stream: stream,
             timeout: timeout,
-            additionalBodyJSON: mergedBodyJSON()
+            additionalBodyJSON: mergedBodyJSON(reasoningLevel: reasoningLevel)
         )
         model.logger = logger
         return model
     }
 
-    /// Merges typed `provider` routing, `reasoning`, and any `extraBodyJSON`
-    /// into one JSON object for the request body. Returns nil when empty.
-    func mergedBodyJSON() -> String? {
+    /// The `reasoning` object for a request: the per-request Apple reasoning
+    /// level wins; otherwise the model's construction-time `reasoning` default.
+    /// `.light/.moderate/.deep` map to effort `low/medium/high`; `.custom` is a
+    /// raw effort string, or disables reasoning for "none"/"off"/"disabled".
+    func reasoningNode(for level: ContextOptions.ReasoningLevel?) -> JSONNode? {
+        guard let level else { return reasoning?.node }
+        switch level {
+        case .light: return .object([.init(key: "effort", value: .string("low"))])
+        case .moderate: return .object([.init(key: "effort", value: .string("medium"))])
+        case .deep: return .object([.init(key: "effort", value: .string("high"))])
+        case .custom(let value):
+            if ["none", "off", "false", "disabled", "0"].contains(value.lowercased()) {
+                return .object([.init(key: "enabled", value: .bool(false))])
+            }
+            return .object([.init(key: "effort", value: .string(value))])
+        }
+    }
+
+    /// Merges typed `provider` routing, the effective `reasoning`, and any
+    /// `extraBodyJSON` into one JSON object for the request body. Nil if empty.
+    func mergedBodyJSON(reasoningLevel: ContextOptions.ReasoningLevel?) -> String? {
         var members: [JSONNode.Member] = []
         if let node = providerRouting?.node { members.append(.init(key: "provider", value: node)) }
-        if let node = reasoning?.node { members.append(.init(key: "reasoning", value: node)) }
+        if let node = reasoningNode(for: reasoningLevel) { members.append(.init(key: "reasoning", value: node)) }
         // Append user extra last so its keys win the de-dupe below.
         if let extraBodyJSON, let parsed = try? JSONNode.parse(extraBodyJSON),
            case .object(let extra) = parsed {
@@ -144,9 +166,13 @@ public struct OpenRouterLanguageModel: Sendable, LanguageModel {
             model: OpenRouterLanguageModel,
             streamingInto channel: LanguageModelExecutorGenerationChannel
         ) async throws {
-            let engine = try ChatCompletionsLanguageModel.Executor(configuration: configuration)
+            // Rebuild per request so the Apple `reasoningLevel` control
+            // (ContextOptions) shapes this request's body — not just the
+            // construction-time default baked into `configuration`.
+            let engineModel = model.asChatCompletions(reasoningLevel: request.contextOptions.reasoningLevel)
+            let engine = try ChatCompletionsLanguageModel.Executor(configuration: engineModel.executorConfiguration)
             do {
-                try await engine.respond(to: request, model: model.asChatCompletions(), streamingInto: channel)
+                try await engine.respond(to: request, model: engineModel, streamingInto: channel)
             } catch let error as LanguageModelTransportError
                 where HTTPErrorHeuristics.isCreditExhaustion(statusCode: error.statusCode, body: error.message) {
                 throw OpenRouterError.creditExhausted(statusCode: error.statusCode, message: error.message)

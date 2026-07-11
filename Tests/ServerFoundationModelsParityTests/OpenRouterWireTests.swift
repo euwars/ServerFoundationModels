@@ -78,6 +78,69 @@ struct OpenRouterWireTests {
         #expect(json["transforms"] as? [String] == ["middle-out"])
     }
 
+    @Test("per-request reasoningLevel (.deep) maps to reasoning.effort=high")
+    func reasoningLevelPerRequest() async throws {
+        let server = try CaptureServer()
+        defer { server.stop() }
+        let model = OpenRouterLanguageModel(model: "x", baseURL: URL(string: "http://127.0.0.1:\(server.port)")!)
+        _ = try await LanguageModelSession(model: model).respond(
+            to: "hi", options: GenerationOptions(),
+            contextOptions: ContextOptions(reasoningLevel: .deep))
+
+        let body = try #require(server.lastBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect((json["reasoning"] as? [String: Any])?["effort"] as? String == "high")
+    }
+
+    @Test("per-request reasoningLevel overrides the construction-time default")
+    func reasoningLevelOverridesDefault() async throws {
+        let server = try CaptureServer()
+        defer { server.stop() }
+        let model = OpenRouterLanguageModel(
+            model: "x",
+            baseURL: URL(string: "http://127.0.0.1:\(server.port)")!,
+            reasoning: .init(effort: .low)
+        )
+        let session = LanguageModelSession(model: model)
+
+        func effort(_ contextOptions: ContextOptions) async throws -> String? {
+            _ = try await session.respond(to: "hi", options: GenerationOptions(), contextOptions: contextOptions)
+            let body = try #require(server.lastBody)
+            let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            return (json["reasoning"] as? [String: Any])?["effort"] as? String
+        }
+        #expect(try await effort(ContextOptions()) == "low")                             // construction default
+        #expect(try await effort(ContextOptions(reasoningLevel: .deep)) == "high")       // per-request wins
+    }
+
+    @Test(#"reasoningLevel .custom("none") disables reasoning"#)
+    func reasoningCustomNoneDisables() async throws {
+        let server = try CaptureServer()
+        defer { server.stop() }
+        let model = OpenRouterLanguageModel(model: "x", baseURL: URL(string: "http://127.0.0.1:\(server.port)")!)
+        _ = try await LanguageModelSession(model: model).respond(
+            to: "hi", options: GenerationOptions(),
+            contextOptions: ContextOptions(reasoningLevel: .custom("none")))
+
+        let body = try #require(server.lastBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect((json["reasoning"] as? [String: Any])?["enabled"] as? Bool == false)
+    }
+
+    @Test("prompt-cache breakpoints (cache_control) carry through to OpenRouter requests")
+    func cacheControlCarries() async throws {
+        let server = try CaptureServer()
+        defer { server.stop() }
+        let model = OpenRouterLanguageModel(model: "x", baseURL: URL(string: "http://127.0.0.1:\(server.port)")!)
+        _ = try await LanguageModelSession(model: model, instructions: "system prompt").respond(to: "hi")
+
+        let body = try #require(server.lastBody)
+        let text = String(decoding: body, as: UTF8.self)
+        // The prompt-cache breakpoints ride through the composed engine unchanged.
+        #expect(text.contains("cache_control"))
+        #expect(text.contains("ephemeral"))
+    }
+
     @Test("credit exhaustion (HTTP 402 / 403-credit) is recognized")
     func creditExhaustionHeuristic() {
         #expect(HTTPErrorHeuristics.isCreditExhaustion(statusCode: 402, body: "anything"))

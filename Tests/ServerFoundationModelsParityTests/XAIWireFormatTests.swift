@@ -67,6 +67,27 @@ import Testing
         #expect(wire.contains("\"prompt_cache_key\":\"convo-uuid\""))
     }
 
+    @Test func perRequestReasoningLevelReachesWire() throws {
+        func wire(_ level: ContextOptions.ReasoningLevel) throws -> String {
+            let request = LanguageModelExecutorGenerationRequest(
+                id: UUID(),
+                transcript: Transcript(entries: [.prompt(.init(segments: [.text(.init(content: "hi"))]))]),
+                enabledTools: [],
+                generationOptions: GenerationOptions(),
+                contextOptions: ContextOptions(reasoningLevel: level),
+                metadata: [:]
+            )
+            return try XAIRequestBuilder.build(
+                from: request, model: .grok4_3, serverTools: [], conversationState: XAIConversationState()
+            ).request.serialize()
+        }
+        // Apple's per-request reasoning control maps onto xAI's effort field.
+        #expect(try wire(.deep).contains("\"effort\":\"high\""))
+        #expect(try wire(.light).contains("\"effort\":\"low\""))
+        #expect(try wire(.moderate).contains("\"effort\":\"medium\""))
+        #expect(try wire(.custom("medium")).contains("\"effort\":\"medium\""))
+    }
+
     @Test func omitsMaxOutputTokensWhenUnset() throws {
         let request = LanguageModelExecutorGenerationRequest(
             transcript: Transcript(entries: [
