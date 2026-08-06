@@ -71,8 +71,8 @@ import Testing
         var customSegments: [XAIServerToolSegment] = []
         var text = ""
         for await event in channel.stream {
-            guard let response = event as? LanguageModelExecutorGenerationChannel.Response else { continue }
-            switch response.action {
+            guard case .response(let response) = event.storage else { continue }
+            switch response.action.storage {
             case .updateCustomSegment(let segment):
                 if let xai = segment as? XAIServerToolSegment {
                     customSegments.append(xai)

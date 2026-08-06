@@ -141,7 +141,7 @@ public struct AnyDynamicInstructions: DynamicInstructions, ResolvableDynamicInst
     var resolvedInstructionTools: [ErasedTool] { wrapped.allInstructionTools }
 }
 
-public struct _DynamicInstructionsForEach<Data, ID, Content>: DynamicInstructions, ResolvableDynamicInstructions
+public struct DynamicInstructionsForEach<Data, ID, Content>: DynamicInstructions, ResolvableDynamicInstructions
 where Data: RandomAccessCollection, ID: Hashable, Content: DynamicInstructions {
     let data: Data
     let content: (Data.Element) -> Content
@@ -167,7 +167,7 @@ where Data: RandomAccessCollection, ID: Hashable, Content: DynamicInstructions {
     }
 }
 
-extension _DynamicInstructionsForEach where ID == Data.Element.ID, Data.Element: Identifiable {
+extension DynamicInstructionsForEach where ID == Data.Element.ID, Data.Element: Identifiable {
     public init(
         _ data: Data,
         @DynamicInstructionsBuilder content: @escaping (Data.Element) -> Content
@@ -177,7 +177,7 @@ extension _DynamicInstructionsForEach where ID == Data.Element.ID, Data.Element:
 }
 
 extension DynamicInstructions {
-    public typealias ForEach = _DynamicInstructionsForEach
+    public typealias ForEach = DynamicInstructionsForEach
 }
 
 extension Optional: DynamicInstructions, ResolvableDynamicInstructions where Wrapped: DynamicInstructions {
@@ -229,6 +229,12 @@ public struct DynamicInstructionsBuilder {
         _ content: Content?
     ) -> Content? {
         content
+    }
+
+    public static func buildLimitedAvailability(
+        _ content: some DynamicInstructions
+    ) -> AnyDynamicInstructions {
+        AnyDynamicInstructions(content)
     }
 
     public static func buildEither<TrueContent, FalseContent>(

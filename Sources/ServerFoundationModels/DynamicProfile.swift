@@ -33,6 +33,22 @@ extension LanguageModelSession {
         public typealias Body = Never
     }
 
+    /// Type-erased wrapper over any `DynamicProfile` (SDK 27 beta 4).
+    public struct AnyDynamicProfile: LanguageModelSession.DynamicProfile {
+        let wrapped: any LanguageModelSession.DynamicProfile
+
+        public init(_ dynamicProfile: any LanguageModelSession.DynamicProfile) {
+            self.wrapped = dynamicProfile
+        }
+
+        public init(erasing dynamicProfile: some LanguageModelSession.DynamicProfile) {
+            self.wrapped = dynamicProfile
+        }
+
+        public var body: Never { fatalError("leaf DynamicProfile") }
+        public typealias Body = Never
+    }
+
     public struct ConditionalDynamicProfile<TrueContent: LanguageModelSession.DynamicProfile, FalseContent: LanguageModelSession.DynamicProfile>: LanguageModelSession.DynamicProfile {
         enum Branch {
             case trueContent(TrueContent)
@@ -62,6 +78,12 @@ extension LanguageModelSession {
             second content: FalseContent
         ) -> ConditionalDynamicProfile<TrueContent, FalseContent> {
             ConditionalDynamicProfile(branch: .falseContent(content))
+        }
+
+        public static func buildLimitedAvailability(
+            _ component: some LanguageModelSession.DynamicProfile
+        ) -> LanguageModelSession.AnyDynamicProfile {
+            LanguageModelSession.AnyDynamicProfile(component)
         }
     }
 
@@ -114,6 +136,7 @@ struct PrimitiveProfileModifier: LanguageModelSession.DynamicProfileModifier {
         case transcriptErrorHandlingPolicy(TranscriptErrorHandlingPolicy?)
         case onPrompt((Transcript.Prompt) async throws -> Void)
         case onResponse((Transcript.Response) async throws -> Void)
+        case onReasoning((Transcript.Reasoning) async throws -> Void)
         case onToolCall((Transcript.ToolCall) async throws -> Void)
         case onToolOutput((Transcript.ToolOutput) async throws -> Void)
         case onToolCallOutputPair((Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void)
@@ -245,6 +268,20 @@ extension LanguageModelSession.DynamicProfile {
         onResponse { _ in try await action() }
     }
 
+    public func onReasoning(
+        perform action: @escaping (Transcript.Reasoning) async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        LanguageModelSession.ModifiedDynamicProfile(
+            content: self, modifier: PrimitiveProfileModifier(kind: .onReasoning(action))
+        )
+    }
+
+    public func onReasoning(
+        perform action: @escaping () async throws -> Void
+    ) -> some LanguageModelSession.DynamicProfile {
+        onReasoning { _ in try await action() }
+    }
+
     public func onToolCall(
         perform action: @escaping (Transcript.ToolCall) async throws -> Void
     ) -> some LanguageModelSession.DynamicProfile {
@@ -318,6 +355,7 @@ struct ResolvedProfile {
     var inputFilter: (([Transcript.Entry]) -> [Transcript.Entry])?
     var onPrompt: [(Transcript.Prompt) async throws -> Void] = []
     var onResponse: [(Transcript.Response) async throws -> Void] = []
+    var onReasoning: [(Transcript.Reasoning) async throws -> Void] = []
     var onToolCall: [(Transcript.ToolCall) async throws -> Void] = []
     var onToolOutput: [(Transcript.ToolOutput) async throws -> Void] = []
     var onToolCallOutputPair: [(Transcript.ToolCall, Transcript.ToolOutput) async throws -> Void] = []
@@ -353,6 +391,12 @@ private func openProfileBody<P: LanguageModelSession.DynamicProfile>(_ profile: 
 /// Composite nodes that resolve without going through `body`.
 protocol ResolvableDynamicProfile {
     func resolveProfile() -> ResolvedProfile
+}
+
+extension LanguageModelSession.AnyDynamicProfile: ResolvableDynamicProfile {
+    func resolveProfile() -> ResolvedProfile {
+        resolveAnyProfile(wrapped)
+    }
 }
 
 extension LanguageModelSession.ConditionalDynamicProfile: ResolvableDynamicProfile {
@@ -392,6 +436,7 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
             case .transcriptErrorHandlingPolicy(let policy): resolved.transcriptErrorHandlingPolicy = policy
             case .onPrompt(let action): resolved.onPrompt.append(action)
             case .onResponse(let action): resolved.onResponse.append(action)
+            case .onReasoning(let action): resolved.onReasoning.append(action)
             case .onToolCall(let action): resolved.onToolCall.append(action)
             case .onToolOutput(let action): resolved.onToolOutput.append(action)
             case .onToolCallOutputPair(let action): resolved.onToolCallOutputPair.append(action)
@@ -435,6 +480,7 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
         fromBody.tools = resolved.tools + fromBody.tools
         fromBody.onPrompt = resolved.onPrompt + fromBody.onPrompt
         fromBody.onResponse = resolved.onResponse + fromBody.onResponse
+        fromBody.onReasoning = resolved.onReasoning + fromBody.onReasoning
         fromBody.onToolCall = resolved.onToolCall + fromBody.onToolCall
         fromBody.onToolOutput = resolved.onToolOutput + fromBody.onToolOutput
         fromBody.onToolCallOutputPair = resolved.onToolCallOutputPair + fromBody.onToolCallOutputPair

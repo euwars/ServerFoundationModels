@@ -1,15 +1,17 @@
 // LanguageModelExecutorGenerationChannel — the public event stream executors
-// write generation results into. Mirrors FoundationModels (SDK 27): events
-// are entry-ID-addressed edits (response text, reasoning, tool calls) so
-// executors can build transcript entries incrementally.
+// write generation results into. Mirrors FoundationModels (SDK 27 beta 4):
+// Event and the Action types are opaque structs built through static
+// factories — executors send events; only the session interprets them.
+// Events are entry-ID-addressed edits (response text, reasoning, tool calls)
+// so executors can build transcript entries incrementally.
 
 import Foundation
 
 public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
-    public typealias Element = any Event
+    public typealias Element = Event
 
-    let stream: AsyncStream<any Event>
-    private let continuation: AsyncStream<any Event>.Continuation
+    let stream: AsyncStream<Event>
+    private let continuation: AsyncStream<Event>.Continuation
 
     public init() {
         // Deliberately unbounded: executor events are incremental edits
@@ -23,7 +25,7 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
 
     /// Enqueues the event. `async` for API parity only — the channel is
     /// unbounded, so this never suspends and applies no backpressure.
-    public func send(_ event: some Event) async {
+    public func send(_ event: Event) async {
         continuation.yield(event)
     }
 
@@ -32,13 +34,13 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
     }
 
     public struct AsyncIterator: AsyncIteratorProtocol {
-        var iterator: AsyncStream<any Event>.AsyncIterator
+        var iterator: AsyncStream<Event>.AsyncIterator
 
-        public mutating func next() async throws -> (any Event)? {
+        public mutating func next() async throws -> Event? {
             await iterator.next()
         }
 
-        public mutating func next(isolation actor: isolated (any Actor)?) async throws -> (any Event)? {
+        public mutating func next(isolation actor: isolated (any Actor)?) async throws -> Event? {
             await iterator.next(isolation: actor)
         }
     }
@@ -47,14 +49,59 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
         AsyncIterator(iterator: stream.makeAsyncIterator())
     }
 
-    // MARK: Event protocol
+    // MARK: Event
 
-    public protocol Event: Sendable {
-        var kind: EventKind { get }
-    }
+    /// Opaque to clients, matching Apple's surface: constructed through the
+    /// static factories below, destructured only inside this package.
+    public struct Event: Sendable {
+        package enum Storage: Sendable {
+            case response(Response)
+            case reasoning(Reasoning)
+            case toolCalls(ToolCalls)
+            case recordedToolExecution(RecordedToolExecution)
+        }
 
-    public struct EventKind: Sendable {
-        let raw: String
+        package let storage: Storage
+
+        package init(storage: Storage) {
+            self.storage = storage
+        }
+
+        public static func response(
+            entryID: String? = nil,
+            action: Response.Action
+        ) -> Event {
+            Event(storage: .response(.init(entryID: entryID, action: action)))
+        }
+
+        public static func reasoning(
+            entryID: String? = nil,
+            action: Reasoning.Action
+        ) -> Event {
+            Event(storage: .reasoning(.init(entryID: entryID, action: action)))
+        }
+
+        public static func toolCalls(
+            entryID: String? = nil,
+            action: ToolCalls.Action
+        ) -> Event {
+            Event(storage: .toolCalls(.init(entryID: entryID, action: action)))
+        }
+
+        /// A tool invocation an executor already ran natively (e.g. inside
+        /// Apple's on-device session): recorded in the transcript without
+        /// re-execution. Not part of Apple's public surface.
+        package static func recordedToolExecution(
+            id: String,
+            toolName: String,
+            argumentsJSON: String,
+            outputText: String
+        ) -> Event {
+            Event(storage: .recordedToolExecution(.init(
+                id: id, toolName: toolName,
+                argumentsJSON: argumentsJSON, outputText: outputText
+            )))
+        }
     }
 
     // MARK: Shared payloads
@@ -82,9 +129,15 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
         }
         public var input: Input
         public var output: Output
-        public init(input: Input, output: Output) {
+        public var metadata: [String: any Sendable & Codable & Equatable]
+        public init(
+            input: Input,
+            output: Output,
+            metadata: [String: any Sendable & Codable & Equatable] = [:]
+        ) {
             self.input = input
             self.output = output
+            self.metadata = metadata
         }
     }
 
@@ -107,53 +160,71 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
 
     // MARK: Response events
 
-    public struct Response: Event {
+    public struct Response: Sendable {
         public var entryID: String?
         public var action: Action
 
-        public var kind: EventKind { EventKind(raw: "response") }
+        public struct Action: Sendable {
+            package enum Storage: Sendable {
+                case appendText(TextFragment)
+                case replaceTextSegment(TextSegmentReplacement)
+                case updateCustomSegment(any Transcript.CustomSegment)
+                case addAttachmentSegment(Transcript.AttachmentSegment)
+                case removeAttachmentSegment(id: String)
+                case updateMetadata(Metadata)
+                case updateUsage(Usage)
+            }
 
-        public enum Action: Sendable {
-            case appendText(TextFragment)
-            case replaceTextSegment(TextSegmentReplacement)
-            case updateCustomSegment(any Transcript.CustomSegment)
-            case addAttachmentSegment(Transcript.AttachmentSegment)
-            case removeAttachmentSegment(id: String)
-            case updateMetadata(Metadata)
-            case updateUsage(Usage)
+            package let storage: Storage
+
+            package init(storage: Storage) {
+                self.storage = storage
+            }
         }
     }
 
     // MARK: Reasoning events
 
-    public struct Reasoning: Event {
+    public struct Reasoning: Sendable {
         public var entryID: String?
         public var action: Action
 
-        public var kind: EventKind { EventKind(raw: "reasoning") }
+        public struct Action: Sendable {
+            package enum Storage: Sendable {
+                case appendText(TextFragment)
+                case replaceTextSegment(TextSegmentReplacement)
+                case updateSignature(ReasoningSignature)
+                case updateMetadata(Metadata)
+                case updateUsage(Usage)
+            }
 
-        public enum Action: Sendable {
-            case appendText(TextFragment)
-            case replaceTextSegment(TextSegmentReplacement)
-            case updateSignature(ReasoningSignature)
-            case updateMetadata(Metadata)
-            case updateUsage(Usage)
+            package let storage: Storage
+
+            package init(storage: Storage) {
+                self.storage = storage
+            }
         }
     }
 
     // MARK: Tool call events
 
-    public struct ToolCalls: Event {
+    public struct ToolCalls: Sendable {
         public var entryID: String?
         public var action: Action
 
-        public var kind: EventKind { EventKind(raw: "toolCalls") }
+        public struct Action: Sendable {
+            package enum Storage: Sendable {
+                case toolCall(ToolCall)
+                case removeToolCall(id: String)
+                case updateMetadata(Metadata)
+                case updateUsage(Usage)
+            }
 
-        public enum Action: Sendable {
-            case toolCall(ToolCall)
-            case removeToolCall(id: String)
-            case updateMetadata(Metadata)
-            case updateUsage(Usage)
+            package let storage: Storage
+
+            package init(storage: Storage) {
+                self.storage = storage
+            }
         }
 
         public struct ToolCall: Sendable {
@@ -161,9 +232,17 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
             public var name: String
             public var action: Action
 
-            public enum Action: Sendable {
-                case appendArguments(ArgumentsFragment)
-                case updateMetadata(Metadata)
+            public struct Action: Sendable {
+                package enum Storage: Sendable {
+                    case appendArguments(ArgumentsFragment)
+                    case updateMetadata(Metadata)
+                }
+
+                package let storage: Storage
+
+                package init(storage: Storage) {
+                    self.storage = storage
+                }
             }
 
             public struct ArgumentsFragment: Sendable {
@@ -174,51 +253,65 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
     }
 }
 
-// MARK: - Convenience constructors (Apple-parity)
+// MARK: - Action factories (Apple-parity)
 
 extension LanguageModelExecutorGenerationChannel.Response.Action {
     public static func appendText(_ text: String, segmentID: String? = nil, tokenCount: Int) -> Self {
-        .appendText(.init(content: text, segmentID: segmentID, tokenCount: tokenCount))
+        .init(storage: .appendText(.init(content: text, segmentID: segmentID, tokenCount: tokenCount)))
     }
 
     public static func replaceTextSegment(_ text: String, segmentID: String? = nil, tokenCount: Int) -> Self {
-        .replaceTextSegment(.init(content: text, segmentID: segmentID, tokenCount: tokenCount))
+        .init(storage: .replaceTextSegment(.init(content: text, segmentID: segmentID, tokenCount: tokenCount)))
+    }
+
+    public static func updateCustomSegment(_ segment: any Transcript.CustomSegment) -> Self {
+        .init(storage: .updateCustomSegment(segment))
+    }
+
+    public static func addAttachmentSegment(_ segment: Transcript.AttachmentSegment) -> Self {
+        .init(storage: .addAttachmentSegment(segment))
+    }
+
+    public static func removeAttachmentSegment(id: String) -> Self {
+        .init(storage: .removeAttachmentSegment(id: id))
     }
 
     public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .updateMetadata(.init(values: values))
+        .init(storage: .updateMetadata(.init(values: values)))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
-        output: LanguageModelExecutorGenerationChannel.Usage.Output
+        output: LanguageModelExecutorGenerationChannel.Usage.Output,
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> Self {
-        .updateUsage(.init(input: input, output: output))
+        .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
 }
 
 extension LanguageModelExecutorGenerationChannel.Reasoning.Action {
     public static func appendText(_ text: String, segmentID: String? = nil, tokenCount: Int) -> Self {
-        .appendText(.init(content: text, segmentID: segmentID, tokenCount: tokenCount))
+        .init(storage: .appendText(.init(content: text, segmentID: segmentID, tokenCount: tokenCount)))
     }
 
     public static func replaceTextSegment(_ text: String, segmentID: String? = nil, tokenCount: Int) -> Self {
-        .replaceTextSegment(.init(content: text, segmentID: segmentID, tokenCount: tokenCount))
+        .init(storage: .replaceTextSegment(.init(content: text, segmentID: segmentID, tokenCount: tokenCount)))
     }
 
     public static func updateSignature(_ signature: Data, tokenCount: Int) -> Self {
-        .updateSignature(.init(signature: signature, tokenCount: tokenCount))
+        .init(storage: .updateSignature(.init(signature: signature, tokenCount: tokenCount)))
     }
 
     public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .updateMetadata(.init(values: values))
+        .init(storage: .updateMetadata(.init(values: values)))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
-        output: LanguageModelExecutorGenerationChannel.Usage.Output
+        output: LanguageModelExecutorGenerationChannel.Usage.Output,
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> Self {
-        .updateUsage(.init(input: input, output: output))
+        .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
 }
 
@@ -228,72 +321,42 @@ extension LanguageModelExecutorGenerationChannel.ToolCalls.Action {
         name: String,
         action: LanguageModelExecutorGenerationChannel.ToolCalls.ToolCall.Action
     ) -> Self {
-        .toolCall(.init(id: id, name: name, action: action))
+        .init(storage: .toolCall(.init(id: id, name: name, action: action)))
+    }
+
+    public static func removeToolCall(id: String) -> Self {
+        .init(storage: .removeToolCall(id: id))
     }
 
     public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .updateMetadata(.init(values: values))
+        .init(storage: .updateMetadata(.init(values: values)))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
-        output: LanguageModelExecutorGenerationChannel.Usage.Output
+        output: LanguageModelExecutorGenerationChannel.Usage.Output,
+        metadata: [String: any Sendable & Codable & Equatable] = [:]
     ) -> Self {
-        .updateUsage(.init(input: input, output: output))
+        .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
 }
 
 extension LanguageModelExecutorGenerationChannel.ToolCalls.ToolCall.Action {
     public static func appendArguments(_ content: String, tokenCount: Int) -> Self {
-        .appendArguments(.init(content: content, tokenCount: tokenCount))
+        .init(storage: .appendArguments(.init(content: content, tokenCount: tokenCount)))
     }
 
     public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .updateMetadata(.init(values: values))
-    }
-}
-
-extension LanguageModelExecutorGenerationChannel.Event
-where Self == LanguageModelExecutorGenerationChannel.Response {
-    public static func response(
-        entryID: String? = nil,
-        action: LanguageModelExecutorGenerationChannel.Response.Action
-    ) -> Self {
-        Self(entryID: entryID, action: action)
-    }
-}
-
-extension LanguageModelExecutorGenerationChannel.Event
-where Self == LanguageModelExecutorGenerationChannel.Reasoning {
-    public static func reasoning(
-        entryID: String? = nil,
-        action: LanguageModelExecutorGenerationChannel.Reasoning.Action
-    ) -> Self {
-        Self(entryID: entryID, action: action)
-    }
-}
-
-extension LanguageModelExecutorGenerationChannel.Event
-where Self == LanguageModelExecutorGenerationChannel.ToolCalls {
-    public static func toolCalls(
-        entryID: String? = nil,
-        action: LanguageModelExecutorGenerationChannel.ToolCalls.Action
-    ) -> Self {
-        Self(entryID: entryID, action: action)
+        .init(storage: .updateMetadata(.init(values: values)))
     }
 }
 
 // MARK: - Internal events
 
-/// A tool invocation an executor already ran natively (e.g. inside Apple's
-/// on-device session): recorded in the transcript without re-execution.
-struct RecordedToolExecution: LanguageModelExecutorGenerationChannel.Event {
-    var id: String
-    var toolName: String
-    var argumentsJSON: String
-    var outputText: String
-
-    var kind: LanguageModelExecutorGenerationChannel.EventKind {
-        .init(raw: "recordedToolExecution")
-    }
+/// Payload for `Event.recordedToolExecution` — see that factory's doc.
+package struct RecordedToolExecution: Sendable {
+    package var id: String
+    package var toolName: String
+    package var argumentsJSON: String
+    package var outputText: String
 }

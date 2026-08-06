@@ -14,9 +14,10 @@ runner via `scripts/compat-check.sh`).
 ## Layer 1 — Signature-level interface diff (compile-time surface)
 
 `scripts/interface-diff.py` compares Apple's `.swiftinterface` (vendored at
-`reference/FoundationModels-macOS27.swiftinterface`, verified identical to
-the iOS 27 surface) against ServerFoundationModels's emitted interface, declaration
-by declaration with normalized signatures.
+`reference/FoundationModels-macOS27.swiftinterface`, from Xcode 27 beta 4;
+the macOS surface is a strict subset of iOS 27's, which adds only
+`ImageReference.resolved(in:)`) against ServerFoundationModels's emitted
+interface, declaration by declaration with normalized signatures.
 
 ```sh
 swift build -Xswiftc -enable-library-evolution \
@@ -25,7 +26,7 @@ swift build -Xswiftc -enable-library-evolution \
 python3 scripts/interface-diff.py reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 ```
 
-Current state: **0 gaps across 818 Apple declarations** (with a short,
+Current state: **0 gaps across 789 Apple declarations** (with a short,
 reasoned allowlist inside the script: macro-synthesized `PartiallyGenerated`
 types, the advisory Regex guide, and adapters off-macOS). Name-level
 `scripts/api-audit.py` additionally gates 151/151 types.
@@ -56,7 +57,11 @@ on-device model and against vLLM/qwen3-moe over the network.
 against the real framework, swaps the import, and runs their complete test
 suites against ServerFoundationModels:
 
-- `anthropics/ClaudeForFoundationModels` — full suite green at the pinned commit
+- `anthropics/ClaudeForFoundationModels` — library target green at the pinned
+  commit. Its test support destructures channel events through the pre-beta-4
+  `Event` protocol, which Xcode 27 beta 4 replaced with an opaque struct on
+  both implementations — those tests need the upstream beta-4 adaptation
+  before they can compile against either framework.
 - `apple/foundation-models-utilities` — full suite green (its tests pinned down exact
   profile/history/skills semantics that documentation never states)
 

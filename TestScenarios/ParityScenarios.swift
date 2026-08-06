@@ -23,7 +23,11 @@ import ServerFoundationModels
 import ServerFoundationModelsUtilities
 #elseif canImport(FoundationModels)
 import FoundationModels
+// Xcode 27 beta 4 dropped FoundationModelsUtilities from the SDK; the shared
+// scenarios only use core-surface symbols, so import it only where it exists.
+#if canImport(FoundationModelsUtilities)
 import FoundationModelsUtilities
+#endif
 #endif
 
 #if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS || canImport(FoundationModels)

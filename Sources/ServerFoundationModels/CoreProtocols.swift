@@ -32,6 +32,16 @@ extension Generable {
         // A complete value always converts to its own partial representation.
         try! Self.PartiallyGenerated(generatedContent)
     }
+
+    // SDK 27 beta 4 re-declares these directly on Generable (they also exist
+    // on ConvertibleToGeneratedContent); mirrored for overload-level parity.
+    public var promptRepresentation: Prompt {
+        Prompt(text: generatedContent.jsonString)
+    }
+
+    public var instructionsRepresentation: Instructions {
+        Instructions(text: generatedContent.jsonString)
+    }
 }
 
 /// The partial-generation view of a `Generable` type, spelled as a plain

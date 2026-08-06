@@ -423,6 +423,15 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var name: String
         var schemaNode: SchemaNode?
 
+        /// The requested output shape (SDK 27 beta 4).
+        public var kind: Kind {
+            .schema(GenerationSchema(node: schemaNode ?? .raw(.object([]))))
+        }
+
+        public enum Kind: Sendable, Equatable {
+            case schema(GenerationSchema)
+        }
+
         public init(schema: GenerationSchema) {
             if case .object(let typeName, _, _) = schema.root {
                 self.name = typeName

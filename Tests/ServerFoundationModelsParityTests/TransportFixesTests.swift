@@ -33,7 +33,7 @@ struct TransportFixesTests {
     /// sentinel metadata event marks the end of the captured stream.
     private func collectEvents(
         port: UInt16
-    ) async throws -> [any LanguageModelExecutorGenerationChannel.Event] {
+    ) async throws -> [LanguageModelExecutorGenerationChannel.Event] {
         let model = ChatCompletionsLanguageModel(
             name: "wire-model",
             url: URL(string: "http://127.0.0.1:\(port)")!
@@ -48,10 +48,10 @@ struct TransportFixesTests {
         try await executor.respond(to: request, model: model, streamingInto: channel)
         await channel.send(.response(action: .updateMetadata(["sentinel": "end"])))
 
-        var events: [any LanguageModelExecutorGenerationChannel.Event] = []
+        var events: [LanguageModelExecutorGenerationChannel.Event] = []
         for try await event in channel {
-            if let response = event as? LanguageModelExecutorGenerationChannel.Response,
-                case .updateMetadata(let metadata) = response.action,
+            if case .response(let response) = event.storage,
+                case .updateMetadata(let metadata) = response.action.storage,
                 metadata.values["sentinel"] as? String == "end" {
                 break
             }
@@ -224,9 +224,9 @@ struct TransportFixesTests {
 
         let events = try await collectEvents(port: server.port)
         let calls = events.compactMap { event -> (id: String, name: String, arguments: String)? in
-            guard let toolEvent = event as? LanguageModelExecutorGenerationChannel.ToolCalls,
-                case .toolCall(let call) = toolEvent.action,
-                case .appendArguments(let fragment) = call.action else { return nil }
+            guard case .toolCalls(let toolEvent) = event.storage,
+                case .toolCall(let call) = toolEvent.action.storage,
+                case .appendArguments(let fragment) = call.action.storage else { return nil }
             return (call.id, call.name, fragment.content)
         }
 
@@ -250,9 +250,9 @@ struct TransportFixesTests {
 
         let events = try await collectEvents(port: server.port)
         let calls = events.compactMap { event -> (name: String, arguments: String)? in
-            guard let toolEvent = event as? LanguageModelExecutorGenerationChannel.ToolCalls,
-                case .toolCall(let call) = toolEvent.action,
-                case .appendArguments(let fragment) = call.action else { return nil }
+            guard case .toolCalls(let toolEvent) = event.storage,
+                case .toolCall(let call) = toolEvent.action.storage,
+                case .appendArguments(let fragment) = call.action.storage else { return nil }
             return (call.name, fragment.content)
         }
         try #require(calls.count == 1)

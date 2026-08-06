@@ -90,6 +90,13 @@ let package = Package(
                 dependencies: [
                     "ServerFoundationModelsMacros",
                     .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+                    // Xcode 27 beta 4's swiftbuild backend does not propagate a
+                    // macro target's own swift-syntax dependencies to the test
+                    // bundle's link line — list them explicitly.
+                    .product(name: "SwiftSyntax", package: "swift-syntax"),
+                    .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+                    .product(name: "SwiftParser", package: "swift-syntax"),
+                    .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 ],
                 swiftSettings: concurrencySettings
             ))
@@ -134,6 +141,13 @@ let package = Package(
                 "ServerFoundationModelsUtilities",
                 "ServerFoundationModelsTimeline",
                 .product(name: "Logging", package: "swift-log"),
+                // Xcode 27 beta 4's swiftbuild backend links the macro target's
+                // testable object into every test bundle in the package but not
+                // its swift-syntax dependencies — list them explicitly.
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
             ],
             swiftSettings: concurrencySettings + [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
         ),

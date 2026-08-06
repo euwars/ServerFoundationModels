@@ -445,7 +445,7 @@ and 5 (the third-party corpus, whose packages build only on Apple
 platforms) run on a self-hosted macOS 27 runner via the same workflow.
 
 1. **Signature diff** — every public declaration in Apple's vendored
-   macOS 27 `.swiftinterface` (818 checked) must exist here with a
+   macOS 27 `.swiftinterface` (789 checked, Xcode 27 beta 4) must exist here with a
    matching signature: currently **0 gaps**.
 2. **One test suite, two libraries** — `TestScenarios/ParityScenarios.swift`
    compiles into two targets via symlink: identical code and assertions,

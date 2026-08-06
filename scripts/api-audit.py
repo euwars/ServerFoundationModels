@@ -118,6 +118,9 @@ KNOWN_PRESENT = {
     "LanguageModelExecutorGenerationChannel.Event.response",
     "LanguageModelExecutorGenerationChannel.Event.reasoning",
     "LanguageModelExecutorGenerationChannel.Event.toolCalls",
+    # Declared in Sources on a struct whose generic where-clause wraps to the
+    # next line, so this line-based parser cannot attribute the member:
+    "DynamicInstructionsForEach.body",
 }
 missing_members = []
 for m in apple_members:

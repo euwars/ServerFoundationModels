@@ -532,6 +532,17 @@ public struct GenerationSchema: Sendable, Equatable, Codable, CustomDebugStringC
 
     public var debugDescription: String { jsonSchemaDocument.serialized }
 
+    /// The root type's name (SDK 27 beta 4). Unnamed roots (scalars, arrays)
+    /// report "response", matching `Transcript.ResponseFormat`'s fallback.
+    public var name: String {
+        switch root {
+        case .object(let typeName, _, _): return typeName
+        case .anyOf(let typeName, _, _): return typeName
+        case .reference(let target): return target
+        default: return "response"
+        }
+    }
+
     /// Full JSON Schema document. When the schema is recursive or refers to
     /// dependency schemas, referenced type definitions are hoisted into
     /// `$defs` (from the root and from dependencies, transitively) so every

@@ -366,7 +366,7 @@ extension SystemLanguageModel.Executor {
             let fmSchema = try convertSchema(schema)
             let response = try await fmSession.respond(to: promptText, schema: fmSchema, options: fmOptions)
             for call in await recorder.calls {
-                await channel.send(RecordedToolExecution(
+                await channel.send(.recordedToolExecution(
                     id: call.id, toolName: call.toolName,
                     argumentsJSON: call.argumentsJSON, outputText: call.output
                 ))
@@ -399,7 +399,7 @@ extension SystemLanguageModel.Executor {
             // Tool executions happened natively inside Apple's session; relay
             // them so the ServerFoundationModels transcript records them faithfully.
             for call in await recorder.calls {
-                await channel.send(RecordedToolExecution(
+                await channel.send(.recordedToolExecution(
                     id: call.id, toolName: call.toolName,
                     argumentsJSON: call.argumentsJSON, outputText: call.output
                 ))

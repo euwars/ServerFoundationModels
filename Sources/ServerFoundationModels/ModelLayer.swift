@@ -272,6 +272,10 @@ public enum LanguageModelError: LocalizedError, CustomDebugStringConvertible {
         /// The conversation up to and including the refusal. Continuing it is
         /// how `explanation` produces a model-authored reason for the refusal.
         public var transcriptEntries: [Transcript.Entry]
+        /// Set by `init(explanation:...)` (SDK 27 beta 4): a caller-supplied
+        /// explanation returned as-is, with no model round-trip.
+        let storedExplanation: String?
+
         public init(
             debugDescription: String,
             metadata: [String: any Sendable] = [:],
@@ -280,12 +284,33 @@ public enum LanguageModelError: LocalizedError, CustomDebugStringConvertible {
             self.debugDescription = debugDescription
             self.metadata = metadata
             self.transcriptEntries = transcriptEntries
+            self.storedExplanation = nil
+        }
+
+        public init(
+            explanation: String,
+            debugDescription: String,
+            metadata: [String: any Sendable] = [:]
+        ) {
+            self.debugDescription = debugDescription
+            self.metadata = metadata
+            self.transcriptEntries = []
+            self.storedExplanation = explanation
         }
 
         /// A model-generated explanation of the refusal, produced by continuing
-        /// the refusing conversation on the default on-device model.
+        /// the refusing conversation on the default on-device model — or the
+        /// caller-supplied explanation, verbatim, when one was provided.
         public var explanation: LanguageModelSession.Response<String> {
             get async throws {
+                if let storedExplanation {
+                    return LanguageModelSession.Response(
+                        content: storedExplanation,
+                        rawContent: GeneratedContent(storedExplanation),
+                        transcriptEntries: ArraySlice(transcriptEntries),
+                        usage: LanguageModelSession.Usage()
+                    )
+                }
                 let session = LanguageModelSession(
                     model: SystemLanguageModel.default,
                     transcript: Transcript(entries: transcriptEntries)

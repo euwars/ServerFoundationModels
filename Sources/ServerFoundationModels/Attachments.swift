@@ -17,9 +17,11 @@ public struct GenerationID: Sendable, Hashable {
     public init() { self.raw = UUID() }
 }
 
+/// Retained for source compatibility: Xcode 27 beta 4 removed this protocol
+/// and unconstrained `Attachment`'s generic parameter to match.
 public protocol AttachmentContent {}
 
-public struct Attachment<Content: AttachmentContent> {
+public struct Attachment<Content> {
     public var label: String?
     public var content: Content
 

@@ -1198,12 +1198,13 @@ public final class LanguageModelSession: @unchecked Sendable {
                 usage.input.cachedTokenCount = reported.input.cachedTokenCount
                 usage.output.totalTokenCount = reported.output.totalTokenCount
                 usage.output.reasoningTokenCount = reported.output.reasoningTokenCount
+                responseMetadata.merge(reported.metadata) { _, new in new }
             }
 
             for await event in channel.stream {
-                switch event {
-                case let response as LanguageModelExecutorGenerationChannel.Response:
-                    switch response.action {
+                switch event.storage {
+                case .response(let response):
+                    switch response.action.storage {
                     case .appendText(let fragment):
                         text += fragment.content
                         appendResponseText(fragment.content)
@@ -1228,8 +1229,8 @@ public final class LanguageModelSession: @unchecked Sendable {
                     case .updateMetadata(let reported):
                         responseMetadata.merge(reported.values) { _, new in new }
                     }
-                case let reasoningEvent as LanguageModelExecutorGenerationChannel.Reasoning:
-                    switch reasoningEvent.action {
+                case .reasoning(let reasoningEvent):
+                    switch reasoningEvent.action.storage {
                     case .appendText(let fragment):
                         reasoning += fragment.content
                     case .replaceTextSegment(let replacement):
@@ -1241,13 +1242,13 @@ public final class LanguageModelSession: @unchecked Sendable {
                     case .updateMetadata:
                         break
                     }
-                case let toolEvent as LanguageModelExecutorGenerationChannel.ToolCalls:
-                    switch toolEvent.action {
+                case .toolCalls(let toolEvent):
+                    switch toolEvent.action.storage {
                     case .toolCall(let call):
                         var accumulated = toolCallAccumulator[call.id] ?? (name: call.name, argumentsJSON: "")
                         if toolCallAccumulator[call.id] == nil { toolCallOrder.append(call.id) }
                         if !call.name.isEmpty { accumulated.name = call.name }
-                        if case .appendArguments(let fragment) = call.action {
+                        if case .appendArguments(let fragment) = call.action.storage {
                             accumulated.argumentsJSON += fragment.content
                         }
                         toolCallAccumulator[call.id] = accumulated
@@ -1259,7 +1260,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     case .updateMetadata:
                         break
                     }
-                case let recorded as RecordedToolExecution:
+                case .recordedToolExecution(let recorded):
                     let arguments = (try? GeneratedContent(json: recorded.argumentsJSON))
                         ?? GeneratedContent(properties: [:])
                     recordedCalls.append(Transcript.ToolCall(
@@ -1270,8 +1271,6 @@ public final class LanguageModelSession: @unchecked Sendable {
                         toolName: recorded.toolName,
                         segments: [.text(.init(content: recorded.outputText))]
                     ))
-                default:
-                    break
                 }
             }
             let toolCalls = toolCallOrder.compactMap { id in
@@ -1294,10 +1293,14 @@ public final class LanguageModelSession: @unchecked Sendable {
             // The model's thinking is part of the durable record, ahead of
             // the response it led to.
             if !reasoning.isEmpty || reasoningSignature != nil {
-                appendEntry(.reasoning(Transcript.Reasoning(
+                let reasoningEntry = Transcript.Reasoning(
                     segments: reasoning.isEmpty ? [] : [.text(.init(content: reasoning))],
                     signature: reasoningSignature
-                )))
+                )
+                appendEntry(.reasoning(reasoningEntry))
+                if let resolved {
+                    for action in resolved.onReasoning { try await action(reasoningEntry) }
+                }
             }
 
             // Tool executions the executor already performed natively are
