@@ -3,87 +3,54 @@
 How to run ServerFoundationModels under sustained load, and what the library
 does (and deliberately does not do) for you.
 
-## Transports
+## Bring a provider
 
-| | Default (`AsyncHTTPClient` trait, on) | Opt-out (`traits: []`) |
-|---|---|---|
-| Stack | NIO pooled `HTTPClient.shared` | corelibs/Darwin URLSession |
-| Dependencies | swift-nio + async-http-client | swift-log only |
-| Best for | servers (Vapor/Hummingbird already carry NIO) | CLIs, dependency-light builds |
-
-The NIO transport is the default. For a dependency-light build:
-
-```swift
-.package(url: "…/ServerFoundationModels.git", from: "0.1.0", traits: [])
-```
-
-Both transports stream SSE, propagate task cancellation into the HTTP
-request, and map provider errors to the typed taxonomy (429 →
-`LanguageModelError.rateLimited` with `resetDate` from `Retry-After`;
-context-window 400/413 → `.contextSizeExceeded`; everything else →
-`LanguageModelTransportError` carrying status code and body). The SSE
-parser tolerates keep-alive comments, malformed frames, CRLF delimiters,
-and streams that close without `[DONE]` (see `SSEEdgeCaseTests`).
+This package is the FoundationModels surface only. Models plug in through
+the `LanguageModel` / `LanguageModelExecutor` protocols — either a provider
+package (e.g.
+[euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
+with its `ServerFoundationModels` trait) or your own executor. Transport
+concerns — HTTP clients, SSE parsing, retries at the wire level — belong to
+the provider; the library's session machinery handles everything above the
+executor: guided generation, the tool loop, transcripts, streaming
+snapshots, cancellation, and typed errors.
 
 ## Logging
 
-Transport diagnostics integrate with [swift-log](https://github.com/apple/swift-log)
-and are **silent by default** (no-op handler). Assign a logger to see them:
-
-```swift
-var model = ChatCompletionsLanguageModel(name: "qwen3", url: endpoint)
-model.logger = Logger(label: "llm")   // your app's configured logger
-```
-
-Emitted events: request lifecycle at `.debug` (model, host, tool count,
-guided flag), HTTP error responses at `.warning` (status + truncated
-provider body), skipped malformed SSE frames at `.debug` (size only).
-Prompt, instruction, and response content is never logged at any level.
+Diagnostics integrate with [swift-log](https://github.com/apple/swift-log)
+and are **silent by default** (no-op handler). Prompt, instruction, and
+response content is never logged at any level.
 
 ## Sessions and concurrency
 
 - `LanguageModelSession` is single-conversation state: one request at a
   time per session (a second concurrent `respond` refuses, matching
   Apple). For server workloads create a session per request/conversation —
-  sessions are cheap; the underlying HTTP transport is shared.
+  sessions are cheap; share what is expensive (HTTP clients) inside the
+  provider.
 - Concurrent sessions are safe and stress-tested (8 parallel sessions ×
   multiple rounds in `concurrentSessionsStress`, run with
   `PARITY_STRESS=1`).
 - Cancellation: cancelling the `Task` running `respond`/`streamResponse`,
-  or abandoning a `ResponseStream` iterator, cancels the in-flight HTTP
-  request. No detached work survives the caller.
+  or abandoning a `ResponseStream` iterator, cancels the in-flight
+  executor work. No detached work survives the caller.
 
-## xAI (`XAILanguageModel`)
+## Errors
 
-- **One state object per session**: pass a dedicated `XAIConversationState`
-  into each `XAILanguageModel`. The executor registry shares HTTP clients
-  across configurations, but chaining state (`previous_response_id`, stored
-  `output[]` bytes, prompt-cache key) lives in that state object.
-- **Chaining modes**: threadable parents (single-agent Grok, live response
-  ID < 25 days) use `previous_response_id` with delta input only.
-  Multi-agent parents and expired IDs fall back to inline output replay.
-  A 400 `"Each message must have at least one content element"` on threading
-  triggers automatic inline replay.
-- **Timeouts**: default 300 s. Multi-agent calls can run several minutes;
-  raise `XAILanguageModel(timeout:)` if needed.
-- **Prompt cache**: `conversationState.promptCacheKey` is sent on every
-  request; confirm hits via `Response.usage.input.cachedTokenCount`.
-- **Wire quirks** (handled by the executor): omit empty `tools`, never send
-  `instructions` with `previous_response_id`, user content as
-  `input_text` blocks, `store: true` on every request.
-
-Unlike `ChatCompletionsLanguageModel`, threaded xAI turns do **not**
-resend the full transcript prefix — only the delta since the last
-response. The transcript-growth strategies below still apply when inline
-replay or fresh mode is active.
+Executors surface failures through the typed taxonomy:
+`LanguageModelError.rateLimited` (with `resetDate`),
+`.contextSizeExceeded`, `.refusal`, and `LanguageModelTransportError`
+carrying status code and body for everything else. The library does not
+retry: retrying a generation is a policy decision (idempotency, cost);
+wrap `respond` with your own retry on `.rateLimited` honoring `resetDate`,
+and on transient `LanguageModelTransportError` (5xx).
 
 ## Transcript growth
 
 A session's transcript grows without bound: every prompt, response,
-tool-call round, and re-resolved profile instructions entry is persisted.
-With `ChatCompletionsLanguageModel` the FULL transcript is sent to the
-provider on every round; with threaded `XAILanguageModel` only the delta
-is sent when chaining succeeds. For long-lived conversations this means:
+tool-call round, and re-resolved profile instructions entry is persisted,
+and providers typically resend it every round. For long-lived
+conversations this means:
 
 - request payloads (and provider token counts) grow linearly per round;
 - you will eventually hit the model's context window, surfaced as
@@ -112,16 +79,6 @@ Token budgeting: `Response.usage` (and streamed `updateUsage` events)
 report input/output token counts per round when the provider sends them —
 watch `inputTokens.totalTokenCount` to know how close you are to the
 window before overflow happens.
-
-## Timeouts and retries
-
-- Configure the per-request timeout via
-  `ChatCompletionsLanguageModel.Configuration.timeout` (default 600 s —
-  generation is slow; do not use generic 30 s HTTP defaults).
-- The library does not retry. Retrying a generation is a policy decision
-  (idempotency, cost); wrap `respond` with your own retry on
-  `.rateLimited` honoring `resetDate`, and on transient
-  `LanguageModelTransportError` (5xx).
 
 ## Memory
 

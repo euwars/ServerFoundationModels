@@ -1,13 +1,22 @@
 {
-  "originHash" : "57e8198136fcd88b9df4922df5454d74c98cf6fd6b35cab37c6045141ac32547",
+  "originHash" : "64d5d30bd5eafcb03294d32ac62c8ba9ca4175f4f6cd17de63af2bf8ca354b93",
   "pins" : [
+    {
+      "identity" : "openrouterforfoundationmodels",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/euwars/OpenrouterForFoundationModels.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "59a3d9e3a6dff6da963711a18d0e6f588d5d6a07"
+      }
+    },
     {
       "identity" : "swift-log",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "92448c359f00ebe36ae97d3bd9086f13c7692b5a",
-        "version" : "1.13.2"
+        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
+        "version" : "1.15.0"
       }
     },
     {

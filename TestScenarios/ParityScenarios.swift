@@ -20,7 +20,6 @@ import Testing
 
 #if PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS
 import ServerFoundationModels
-import ServerFoundationModelsUtilities
 #elseif canImport(FoundationModels)
 import FoundationModels
 // Xcode 27 beta 4 dropped FoundationModelsUtilities from the SDK; the shared

@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash scripts/linux-container-shell.sh
-#   bash scripts/linux-container-shell.sh swift test --filter XAIWireFormatTests
+#   bash scripts/linux-container-shell.sh swift test --filter SessionBehaviorTests
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

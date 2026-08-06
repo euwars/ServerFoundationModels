@@ -4,7 +4,7 @@
 # Usage:
 #   bash scripts/linux-container-verify.sh              # full verify
 #   LINUX_VERIFY_QUICK=1 bash scripts/linux-container-verify.sh
-#   XAI_API_KEY=... bash scripts/linux-container-verify.sh
+#   OPENROUTER_API_KEY=... bash scripts/linux-container-verify.sh
 #
 # Docker / CPU env:
 #   SWIFT_BUILD_JOBS=20           — swift -j (default: container nproc)
@@ -71,7 +71,7 @@ if [[ -n "${LINUX_VERIFY_CPUS:-}" ]]; then
 fi
 
 env_args=(
-  -e "XAI_API_KEY=${XAI_API_KEY:-}"
+  -e "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}"
   -e "LINUX_VERIFY_QUICK=${LINUX_VERIFY_QUICK:-}"
   -e "SWIFT_BUILD_JOBS=$SWIFT_BUILD_JOBS"
 )

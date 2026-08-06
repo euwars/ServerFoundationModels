@@ -590,7 +590,7 @@ extension Transcript.CustomSegment {
 ///   Equatable]` existentials whose concrete types cannot be recovered when
 ///   decoding, so metadata is not encoded and always decodes as `[:]`.
 /// - `.custom` segments encode their id and textual description (the same
-///   text used to replay them in prompts). `XAIServerToolSegment` round-trips
+///   text used to replay them in prompts). Executor packages can round-trip
 ///   via `subtype: "xai_server_tool"`. Other custom segment types decode as
 ///   `.text` segments preserving the id and description.
 /// - Image attachments encode their id, label, orientation, and image bytes
@@ -795,14 +795,7 @@ extension Transcript: Codable {
             case .custom(let custom):
                 kind = "custom"
                 id = custom.id
-                if let activity = custom as? XAIServerToolSegment,
-                    let encoded = Self.encodeXAIContent(activity.content)
-                {
-                    subtype = "xai_server_tool"
-                    content = encoded
-                } else {
-                    content = custom.description
-                }
+                content = custom.description
             }
         }
 
@@ -840,13 +833,8 @@ extension Transcript: Codable {
                 return .attachment(.init(id: id, content: .image(.init(data: data)), label: label))
                 #endif
             case "custom":
-                if subtype == "xai_server_tool",
-                    let payload = content,
-                    let decoded = Self.decodeXAIContent(payload)
-                {
-                    return .custom(XAIServerToolSegment(id: id, content: decoded))
-                }
-                // Unknown custom segment types preserve replay text as a text segment.
+                // Custom segment types are executor-defined; decoding preserves
+                // their replay text as a text segment.
                 return .text(.init(id: id, content: content ?? ""))
             default:
                 throw DecodingError.dataCorrupted(.init(
@@ -856,15 +844,6 @@ extension Transcript: Codable {
             }
         }
 
-        private static func encodeXAIContent(_ content: XAIServerToolSegment.Content) -> String? {
-            guard let data = try? JSONEncoder().encode(content) else { return nil }
-            return String(data: data, encoding: .utf8)
-        }
-
-        private static func decodeXAIContent(_ payload: String) -> XAIServerToolSegment.Content? {
-            guard let data = payload.data(using: .utf8) else { return nil }
-            return try? JSONDecoder().decode(XAIServerToolSegment.Content.self, from: data)
-        }
     }
 }
 

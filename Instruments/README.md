@@ -15,8 +15,8 @@ All signposts are emitted under the subsystem **`com.serverfoundationmodels`**
 | `ModelRequest` | one per HTTP request (start → stream fully consumed) | `model`, `session`, time-to-first-token (ms), input/output tokens, success |
 | `ToolRun` | one per tool execution (in and around the session's tool loop) | `tool`, `session` |
 
-Both the native `XAILanguageModel` and the `ChatCompletionsLanguageModel`
-(utilities) providers are instrumented, as is the session's tool-call loop.
+Model executors emit `ModelRequest` through `FMSignpost`; the session's
+tool-call loop emits `ToolRun`.
 
 Emission is compiled in only where `os` is available (Apple platforms) and
 compiles to nothing on Linux, so the call sites carry no runtime cost off-Apple.

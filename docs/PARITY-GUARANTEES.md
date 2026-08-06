@@ -7,9 +7,8 @@ behaves identically against ServerFoundationModels after changing one line —
 Five independent verification layers enforce it, each catching a class of
 divergence the others can't. All are machine-checkable; layers 1 and 2 run
 in CI on every push (layer 3's live suites self-gate when no model is
-reachable; the Apple-oracle half of layer 3 and layer 4's third-party
-corpus — Apple-platforms-only packages — run on the self-hosted macOS
-runner via `scripts/compat-check.sh`).
+reachable; the Apple-oracle half of layer 3 runs on the self-hosted macOS
+runner).
 
 ## Layer 1 — Signature-level interface diff (compile-time surface)
 
@@ -44,26 +43,22 @@ settling into the exact final text.)
 ## Layer 3 — Live behavioral parity (same model, two libraries)
 
 The same scenario file runs against Apple's framework with the local
-on-device model and against ServerFoundationModels (same on-device model via the
-bridge, or any OpenAI-compatible endpoint via `PARITY_BACKEND`). Dozens of
-scenarios × 2 libraries assert model-agnostic contracts: structured
-output, recursive schemas, guides, tool calling, session properties, dynamic
-profiles, history modifiers, errors, usage. Verified green against the
-on-device model and against vLLM/qwen3-moe over the network.
+on-device model and against ServerFoundationModels (same on-device model
+via the bridge). Dozens of scenarios × 2 libraries assert model-agnostic
+contracts: structured output, recursive schemas, guides, tool calling,
+session properties, dynamic profiles, history modifiers, errors, usage.
+Network-backed validation runs through `integration/openrouter-parity`:
+euwars/OpenrouterForFoundationModels built with its `ServerFoundationModels`
+trait, resolving this working tree via path override, driven live against a
+real OpenRouter model (`OPENROUTER_API_KEY`) — on macOS or Linux.
 
-## Layer 4 — Third-party corpus (real code, unmodified)
+## Layer 4 — Third-party consumer (real code, trait-swapped)
 
-`scripts/compat-check.sh` clones packages written by Apple and Anthropic
-against the real framework, swaps the import, and runs their complete test
-suites against ServerFoundationModels:
-
-- `anthropics/ClaudeForFoundationModels` — library target green at the pinned
-  commit. Its test support destructures channel events through the pre-beta-4
-  `Event` protocol, which Xcode 27 beta 4 replaced with an opaque struct on
-  both implementations — those tests need the upstream beta-4 adaptation
-  before they can compile against either framework.
-- `apple/foundation-models-utilities` — full suite green (its tests pinned down exact
-  profile/history/skills semantics that documentation never states)
+[euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
+is a real provider package written against Apple's framework whose
+`ServerFoundationModels` trait swaps only the import. Its full test suite
+passes under both backends, including on Linux — every green run is a
+compile-and-behave proof over a genuine consumer.
 
 ## Layer 5 — Issue-derived regressions
 

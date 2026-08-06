@@ -1,7 +1,7 @@
 # Reproducible Linux verification image for ServerFoundationModels.
 # Build:  docker build -f docker/linux-verify/Dockerfile -t sfm-linux-verify .
 # Run:    docker run --rm sfm-linux-verify
-# Live:   docker run --rm -e XAI_API_KEY=... sfm-linux-verify
+# Live:   docker run --rm -e OPENROUTER_API_KEY=... sfm-linux-verify
 
 FROM swift:6.2
 

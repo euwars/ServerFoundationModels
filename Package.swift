@@ -17,29 +17,9 @@ let package = Package(
     ],
     products: [
         .library(name: "ServerFoundationModels", targets: ["ServerFoundationModels"]),
-        // Apple's foundation-models-utilities surface (Skills, the
-        // Chat-Completions provider) as its own module, layered on top of the
-        // core — mirroring how Apple ships FoundationModels and
-        // FoundationModelsUtilities as separate frameworks.
-        .library(name: "ServerFoundationModelsUtilities", targets: ["ServerFoundationModelsUtilities"]),
-        .library(name: "ServerFoundationModelsTimeline", targets: ["ServerFoundationModelsTimeline"]),
-        .executable(name: "XAILiveProbe", targets: ["XAILiveProbe"]),
-        .executable(name: "XAIServerToolsProbe", targets: ["XAIServerToolsProbe"]),
-        .executable(name: "XAIDeepResearchProbe", targets: ["XAIDeepResearchProbe"]),
-        .executable(name: "XAISubagentsProbe", targets: ["XAISubagentsProbe"]),
-        .executable(name: "XAIRecursiveResearchProbe", targets: ["XAIRecursiveResearchProbe"]),
-    ],
-    traits: [
-        // NIO-based HTTP transport (connection pooling; avoids corelibs
-        // URLSession concurrency bugs). Default-on: production servers
-        // already carry NIO. Opt out for a dependency-light build with
-        // `.package(..., traits: [])` — streaming then uses URLSession.
-        .trait(name: "AsyncHTTPClient"),
-        .default(enabledTraits: ["AsyncHTTPClient"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
-        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ],
     targets: {
@@ -49,25 +29,7 @@ let package = Package(
             dependencies: [
                 "ServerFoundationModelsMacros",
                 .product(name: "Logging", package: "swift-log"),
-                .product(
-                    name: "AsyncHTTPClient",
-                    package: "async-http-client",
-                    condition: .when(traits: ["AsyncHTTPClient"])
-                ),
             ],
-            swiftSettings: concurrencySettings
-        ),
-        .target(
-            name: "ServerFoundationModelsUtilities",
-            dependencies: [
-                "ServerFoundationModels",
-                .product(name: "Logging", package: "swift-log"),
-            ],
-            swiftSettings: concurrencySettings
-        ),
-        .target(
-            name: "ServerFoundationModelsTimeline",
-            dependencies: ["ServerFoundationModels"],
             swiftSettings: concurrencySettings
         ),
         .macro(
@@ -101,57 +63,19 @@ let package = Package(
                 swiftSettings: concurrencySettings
             ))
         }
-        targets.append(contentsOf: [
-        // Subject: the same scenarios compiled against this package, running
-        // against a local on-device open model (Ollama / any OpenAI-compatible server).
-        .executableTarget(
-            name: "XAILiveProbe",
-            dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-live-probe",
-            swiftSettings: concurrencySettings
-        ),
-        .executableTarget(
-            name: "XAIServerToolsProbe",
-            dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-server-tools-probe",
-            swiftSettings: concurrencySettings
-        ),
-        .executableTarget(
-            name: "XAIDeepResearchProbe",
-            dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-deep-research",
-            swiftSettings: concurrencySettings
-        ),
-        .executableTarget(
-            name: "XAISubagentsProbe",
-            dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-subagents",
-            swiftSettings: concurrencySettings
-        ),
-        .executableTarget(
-            name: "XAIRecursiveResearchProbe",
-            dependencies: ["ServerFoundationModels"],
-            path: "integration/xai-recursive-research",
-            swiftSettings: concurrencySettings
-        ),
-        .testTarget(
+        targets.append(.testTarget(
             name: "ServerFoundationModelsParityTests",
             dependencies: [
                 "ServerFoundationModels",
-                "ServerFoundationModelsUtilities",
-                "ServerFoundationModelsTimeline",
                 .product(name: "Logging", package: "swift-log"),
-                // Xcode 27 beta 4's swiftbuild backend links the macro target's
-                // testable object into every test bundle in the package but not
-                // its swift-syntax dependencies — list them explicitly.
+                // Same swiftbuild-backend workaround as above.
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
             ],
             swiftSettings: concurrencySettings + [.define("PARITY_SUBJECT_IS_SERVER_FOUNDATION_MODELS")]
-        ),
-        ])
+        ))
         // Apple's FoundationModels macros are only available under Xcode; skip this
         // target on macOS CLI builds so `swift test` can run ServerFoundationModels tests.
         let includeAppleParity = ProcessInfo.processInfo.environment["INCLUDE_APPLE_PARITY_TESTS"] == "1"

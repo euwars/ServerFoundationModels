@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Linux compatibility verification for ServerFoundationModels + XAI provider.
+# Linux compatibility verification for ServerFoundationModels (core library).
 # Intended to run inside the official swift:6.2 container (or native Linux).
 #
 # Usage (from repo root):
 #   bash scripts/linux-verify.sh
 #   LINUX_VERIFY_QUICK=1 bash scripts/linux-verify.sh
 #   SWIFT_BUILD_JOBS=20 bash scripts/linux-verify.sh
-#   XAI_API_KEY=... bash scripts/linux-verify.sh
+#   OPENROUTER_API_KEY=... bash scripts/linux-verify.sh   # adds the live smoke
 #
 # From macOS/host via Docker (recommended — persistent .build volume):
 #   bash scripts/linux-container-verify.sh
@@ -22,51 +22,37 @@ echo "=== Parallel jobs: $SWIFT_JOBS (override with SWIFT_BUILD_JOBS) ==="
 
 pass() { echo "OK: $1"; }
 
-# XAI-focused subset for the quick loop; full runs execute the whole offline
-# suite (live suites self-gate on model availability / XAI_API_KEY).
-XAI_FILTER='XAIWireFormatTests|XAIInlineInputTests|XAIThreadingTests|XAIResponseTranslatorTests|XAIResponseStreamTests|XAISchemaHelpersTests|XAIServerToolSegmentTests|XAIServerToolWireTests|XAIServerToolsValidationTests|XAIServerToolTranscriptCodableTests|SkillsTests'
-
 if [[ "${LINUX_VERIFY_QUICK:-}" == "1" ]]; then
-  echo "--- QUICK: debug build + XAI unit tests ---"
+  echo "--- QUICK: debug build + offline suite ---"
   swift build "${SWIFT_BUILD_FLAGS[@]}" --build-tests
   pass "debug build"
-  swift test "${SWIFT_TEST_FLAGS[@]}" --filter "$XAI_FILTER"
-  pass "XAI unit tests"
+  swift test "${SWIFT_TEST_FLAGS[@]}"
+  pass "offline test suite"
   echo "=== Linux verify (quick): PASSED ==="
   exit 0
 fi
 
-echo "--- build library + tests (release, NIO transport) ---"
+echo "--- build library + tests (release) ---"
 # Release strips -enable-testing by default, so a standalone `build --build-tests`
 # compiles the @testable test modules against a non-testing library and fails.
 # `swift test` enables it implicitly; match that here.
 swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --build-tests -Xswiftc -enable-testing
-pass "release build (AsyncHTTPClient)"
-
-echo "--- build XAILiveProbe (release) ---"
-swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --product XAILiveProbe
-pass "XAILiveProbe release build"
+pass "release build"
 
 echo "--- full offline suite (live suites self-gate) ---"
 swift test -c release "${SWIFT_TEST_FLAGS[@]}"
 pass "offline test suite"
 
-echo "--- build library (URLSession transport, traits disabled) ---"
-swift build -c release "${SWIFT_BUILD_FLAGS[@]}" --disable-default-traits
-pass "release build (URLSession / no AsyncHTTPClient)"
-
-if [[ -n "${XAI_API_KEY:-}" ]]; then
-  echo "--- live xAI probe (grok-4.3 chaining + prompt cache) ---"
-  swift run -c release "${SWIFT_BUILD_FLAGS[@]}" XAILiveProbe | tee /tmp/xai-live.log
-  grep -q "RESULT: PASS" /tmp/xai-live.log
-  pass "XAILiveProbe live (grok-4.3)"
-
-  echo "--- live xAI server-tools probe (strict segment + citation coverage) ---"
-  swift run -c release "${SWIFT_BUILD_FLAGS[@]}" XAIServerToolsProbe | tee /tmp/xai-server-tools.log
-  grep -q "RESULT: PASS" /tmp/xai-server-tools.log
-  pass "XAIServerToolsProbe live (webSearch, xSearch, open_page, citations)"
+# Live model-backed validation goes through the OpenRouter bridge harness
+# (euwars/OpenrouterForFoundationModels built with its ServerFoundationModels
+# trait, resolving this working tree via path override).
+if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+  echo "--- live OpenRouter smoke (respond, streaming, guided, tools) ---"
+  swift run --package-path integration/openrouter-parity | tee /tmp/openrouter-smoke.log
+  grep -q "SMOKE GREEN" /tmp/openrouter-smoke.log
+  pass "OpenRouter live smoke"
 else
-  echo "SKIP: XAILiveProbe / XAIServerToolsProbe (set XAI_API_KEY to run live xAI verification)"
+  echo "SKIP: OpenRouter live smoke (set OPENROUTER_API_KEY to run)"
 fi
 
 echo "=== Linux verify: ALL CHECKS PASSED ==="
