@@ -48,7 +48,9 @@ API, verified signature-for-signature against Apple's interface.
 > `import FoundationModels` line for `import ServerFoundationModels` — or gate
 > the swap behind a package trait, as
 > [euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
-> does.
+> and the
+> [euwars/foundation-models-utilities](https://github.com/euwars/foundation-models-utilities)
+> fork of Apple's utilities package do.
 
 ## Quick start
 
@@ -60,7 +62,7 @@ Linux alike:
 
 ```swift
 // .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
-//          branch: "main", traits: ["ServerFoundationModels"])
+//          from: "0.1.0", traits: ["ServerFoundationModels"])
 import ServerFoundationModels
 import OpenRouterForFoundationModels
 
