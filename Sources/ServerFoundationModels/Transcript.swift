@@ -901,11 +901,11 @@ extension GenerationOptions.SamplingMode: Codable {
         switch kind {
         case .greedy:
             try container.encode("greedy", forKey: .mode)
-        case .top(let k, let seed):
+        case .randomTopK(let k, let seed):
             try container.encode("top", forKey: .mode)
             try container.encode(k, forKey: .k)
             try container.encodeIfPresent(seed, forKey: .seed)
-        case .nucleus(let threshold, let seed):
+        case .randomProbabilityThreshold(let threshold, let seed):
             try container.encode("nucleus", forKey: .mode)
             try container.encode(threshold, forKey: .threshold)
             try container.encodeIfPresent(seed, forKey: .seed)
@@ -919,13 +919,13 @@ extension GenerationOptions.SamplingMode: Codable {
         case "greedy":
             self = .greedy
         case "top":
-            self.init(kind: .top(
-                k: try container.decode(Int.self, forKey: .k),
+            self.init(kind: .randomTopK(
+                try container.decode(Int.self, forKey: .k),
                 seed: try container.decodeIfPresent(UInt64.self, forKey: .seed)
             ))
         case "nucleus":
-            self.init(kind: .nucleus(
-                threshold: try container.decode(Double.self, forKey: .threshold),
+            self.init(kind: .randomProbabilityThreshold(
+                try container.decode(Double.self, forKey: .threshold),
                 seed: try container.decodeIfPresent(UInt64.self, forKey: .seed)
             ))
         default:

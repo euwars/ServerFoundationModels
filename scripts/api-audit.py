@@ -43,6 +43,11 @@ def parse(lines, is_interface):
         closes = line.count("}")
 
         is_public = bool(re.search(r"\bpublic\b", stripped)) and not stripped.startswith("@_spi")
+        # Enum cases inherit their enum's access level: swiftinterface (and
+        # source) emit them without `public`. Identifier required, so
+        # `case .x:` pattern-match lines in code bodies don't count.
+        if not is_public and re.match(r"(?:indirect\s+)?case\s+[A-Za-z_]", stripped):
+            is_public = True
         # extension target tracking
         m = re.match(r"^extension\s+([\w.]+)", stripped)
         if m and depth == 0:

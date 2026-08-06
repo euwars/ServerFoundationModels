@@ -125,6 +125,15 @@ def parse(path):
                 # Accessor noise
                 if sig not in ("get", "set", "_modify", "get async throws") and "func == (" not in sig and "func != (" not in sig:
                     decls[holder].add(sig)
+        elif stack and re.match(r"(?:indirect\s+)?case\s+[A-Za-z_]", line):
+            # Enum cases inherit their enum's access level, so swiftinterface
+            # emits them WITHOUT `public` — the branch above never sees them.
+            # (This blind spot let the beta-3 SamplingMode.Kind case renames
+            # through the gate.) `case .x` pattern-match lines in inlined
+            # @export(implementation) bodies don't match: identifier required.
+            holder = stack[-1][0] if stack else ""
+            sig = re.sub(r"\s*\{.*$", "", line).strip()
+            decls[holder].add(sig)
 
         if opens > closes:
             inner = TYPE_DECL.search(line)

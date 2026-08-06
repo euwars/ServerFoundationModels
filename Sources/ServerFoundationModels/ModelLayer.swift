@@ -13,19 +13,19 @@ public struct GenerationOptions: Sendable, Equatable {
     public struct SamplingMode: Sendable, Equatable {
         public enum Kind: Sendable, Equatable {
             case greedy
-            case top(k: Int, seed: UInt64?)
-            case nucleus(threshold: Double, seed: UInt64?)
+            case randomTopK(_ topK: Int, seed: UInt64?)
+            case randomProbabilityThreshold(_ probabilityThreshold: Double, seed: UInt64?)
         }
         public let kind: Kind
 
         public static var greedy: SamplingMode { SamplingMode(kind: .greedy) }
 
         public static func random(top k: Int, seed: UInt64? = nil) -> SamplingMode {
-            SamplingMode(kind: .top(k: k, seed: seed))
+            SamplingMode(kind: .randomTopK(k, seed: seed))
         }
 
         public static func random(probabilityThreshold: Double, seed: UInt64? = nil) -> SamplingMode {
-            SamplingMode(kind: .nucleus(threshold: probabilityThreshold, seed: seed))
+            SamplingMode(kind: .randomProbabilityThreshold(probabilityThreshold, seed: seed))
         }
     }
 

@@ -370,7 +370,7 @@ struct SessionBehaviorTests {
 
     // MARK: Tool-round text
 
-    @Test("text preceding a tool call is preserved in the transcript and the final response")
+    @Test("text preceding a tool call is preserved in the transcript; content is the final round only")
     func toolRoundTextPreserved() async throws {
         let tool = BehaviorEchoTool()
         let script = ScriptBox(rounds: [
@@ -382,8 +382,10 @@ struct SessionBehaviorTests {
         ])
         let session = LanguageModelSession(model: ScriptedModel(script: script), tools: [tool])
 
+        // Apple (SDK 27 beta): `content` is the final round's text; earlier
+        // rounds' preambles are durable transcript entries, not response text.
         let response = try await session.respond(to: "go")
-        #expect(response.content == "Let me check.\nDone.")
+        #expect(response.content == "Done.")
         #expect(tool.recorder.all == ["x"])
 
         let entries = Array(session.transcript)
@@ -399,7 +401,7 @@ struct SessionBehaviorTests {
         }
     }
 
-    @Test("streaming snapshots never shrink across tool rounds")
+    @Test("streaming snapshots are cumulative within a round and settle into the final round's text")
     func streamingSnapshotsAreMonotonic() async throws {
         let tool = BehaviorEchoTool()
         let script = ScriptBox(rounds: [
@@ -411,14 +413,24 @@ struct SessionBehaviorTests {
         ])
         let session = LanguageModelSession(model: ScriptedModel(script: script), tools: [tool])
 
-        var previous = ""
-        var last = ""
+        // Snapshots track the round in progress (they reset when a tool round
+        // completes) and the last snapshot equals `respond`'s content — the
+        // final round's text, matching Apple (SDK 27 beta).
+        // (Exact sequences can't be pinned: snapshot streams coalesce to the
+        // newest value when the consumer lags.)
+        var snapshots: [String] = []
         for try await snapshot in session.streamResponse(to: "go") {
-            #expect(snapshot.content.hasPrefix(previous), "cumulative snapshots must never regress")
-            previous = snapshot.content
-            last = snapshot.content
+            snapshots.append(snapshot.content)
         }
-        #expect(last == "Let me check.\nDone.")
+        #expect(snapshots.allSatisfy { "Let me check.".hasPrefix($0) || "Done.".hasPrefix($0) })
+        let firstFinalRound = snapshots.firstIndex { "Done.".hasPrefix($0) }
+        if let firstFinalRound {
+            #expect(
+                snapshots[firstFinalRound...].allSatisfy { "Done.".hasPrefix($0) },
+                "rounds do not interleave"
+            )
+        }
+        #expect(snapshots.last == "Done.")
     }
 
     // MARK: Round cap

@@ -311,8 +311,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             appendEntry(.response(responseEntry))
             try await notifyResponse(responseEntry)
             return Response(
-                content: result.text,
-                rawContent: result.text.generatedContent,
+                content: result.finalRoundText,
+                rawContent: result.finalRoundText.generatedContent,
                 transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
                 usage: result.usage
             )
@@ -497,10 +497,10 @@ public final class LanguageModelSession: @unchecked Sendable {
                     let result = try await generateLoop(
                         schema: nil, options: options,
                         contextOptions: contextOptions, metadata: metadata
-                    ) { cumulative, _ in
+                    ) { roundText in
                         continuation.yield(ResponseStream<String>.Snapshot(
-                            content: cumulative,
-                            rawContent: cumulative.generatedContent
+                            content: roundText,
+                            rawContent: roundText.generatedContent
                         ))
                     }
 
@@ -511,8 +511,8 @@ public final class LanguageModelSession: @unchecked Sendable {
                     appendEntry(.response(responseEntry))
                     try await notifyResponse(responseEntry)
                     continuation.yield(ResponseStream<String>.Snapshot(
-                        content: result.text,
-                        rawContent: result.text.generatedContent,
+                        content: result.finalRoundText,
+                        rawContent: result.finalRoundText.generatedContent,
                         transcriptEntries: turnEntries(from: promptEntry.id, fallbackPreCount: preCount),
                         usage: result.usage
                     ))
@@ -582,7 +582,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     let result = try await generateLoop(
                         schema: schema, options: options,
                         contextOptions: effectiveContextOptions, metadata: metadata
-                    ) { _, roundText in
+                    ) { roundText in
                         guard let partialRaw = GeneratedContent.partial(json: Self.stripCodeFences(from: roundText)),
                             let partial = try? Content.PartiallyGenerated(partialRaw)
                         else { return }
@@ -811,7 +811,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     let result = try await generateLoop(
                         schema: schema, options: options,
                         contextOptions: effectiveContextOptions, metadata: metadata
-                    ) { _, roundText in
+                    ) { roundText in
                         if let partial = GeneratedContent.partial(json: Self.stripCodeFences(from: roundText)) {
                             continuation.yield(ResponseStream<GeneratedContent>.Snapshot(
                                 content: partial, rawContent: partial
@@ -938,10 +938,9 @@ public final class LanguageModelSession: @unchecked Sendable {
     /// Runs executor requests until the model produces a final response,
     /// executing tool calls between rounds and recording them in the transcript.
     struct LoopResult {
-        /// Text across all rounds of the turn (tool-call preambles included),
-        /// joined with newlines.
-        var text: String
-        /// Text of the final round only — what structured paths decode.
+        /// Text of the final round only. Matching Apple (SDK 27 beta):
+        /// `respond` content excludes earlier rounds' tool-call preambles —
+        /// those live in the transcript as their own response entries.
         var finalRoundText: String
         /// Ordered response segments from the final round (custom server-tool
         /// activity interleaved with text), when the executor emitted them.
@@ -1082,21 +1081,11 @@ public final class LanguageModelSession: @unchecked Sendable {
         options: GenerationOptions,
         contextOptions: ContextOptions = ContextOptions(),
         metadata: [String: any Sendable & Codable & Equatable] = [:],
-        onCumulativeText: (@Sendable (_ cumulativeText: String, _ roundText: String) -> Void)?
+        onCumulativeText: (@Sendable (_ roundText: String) -> Void)?
     ) async throws -> LoopResult {
         var turnUsage = Usage()
         var firstRound = true
-        // Text from earlier rounds of this turn (tool-call preambles); the
-        // cumulative stream is `completedRoundsText` + the current round's
-        // text so streamed snapshots never regress when a new round starts.
-        var completedRoundsText = ""
         var rounds = 0
-
-        func joinedRounds(_ earlier: String, _ current: String) -> String {
-            if earlier.isEmpty { return current }
-            if current.isEmpty { return earlier }
-            return earlier + "\n" + current
-        }
 
         while true {
             rounds += 1
@@ -1145,6 +1134,7 @@ public final class LanguageModelSession: @unchecked Sendable {
             var text = ""
             var reasoning = ""
             var reasoningSignature: Data?
+            var reasoningMetadata: [String: any Sendable & Codable & Equatable] = [:]
             var usage = Usage()
             var toolCallOrder: [String] = []
             var toolCallAccumulator: [String: (name: String, argumentsJSON: String)] = [:]
@@ -1208,7 +1198,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                     case .appendText(let fragment):
                         text += fragment.content
                         appendResponseText(fragment.content)
-                        onCumulativeText?(joinedRounds(completedRoundsText, text), text)
+                        onCumulativeText?(text)
                     case .replaceTextSegment(let replacement):
                         text = replacement.content
                         if case .text(var existing) = responseSegments.last {
@@ -1217,7 +1207,7 @@ public final class LanguageModelSession: @unchecked Sendable {
                         } else {
                             responseSegments.append(.text(.init(content: replacement.content)))
                         }
-                        onCumulativeText?(joinedRounds(completedRoundsText, text), text)
+                        onCumulativeText?(text)
                     case .updateCustomSegment(let segment):
                         upsertCustomSegment(segment)
                     case .updateUsage(let reported):
@@ -1239,8 +1229,8 @@ public final class LanguageModelSession: @unchecked Sendable {
                         accumulate(reported)
                     case .updateSignature(let signature):
                         reasoningSignature = signature.signature
-                    case .updateMetadata:
-                        break
+                    case .updateMetadata(let reported):
+                        reasoningMetadata.merge(reported.values) { _, new in new }
                     }
                 case .toolCalls(let toolEvent):
                     switch toolEvent.action.storage {
@@ -1292,8 +1282,9 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             // The model's thinking is part of the durable record, ahead of
             // the response it led to.
-            if !reasoning.isEmpty || reasoningSignature != nil {
+            if !reasoning.isEmpty || reasoningSignature != nil || !reasoningMetadata.isEmpty {
                 let reasoningEntry = Transcript.Reasoning(
+                    metadata: reasoningMetadata,
                     segments: reasoning.isEmpty ? [] : [.text(.init(content: reasoning))],
                     signature: reasoningSignature
                 )
@@ -1325,7 +1316,6 @@ public final class LanguageModelSession: @unchecked Sendable {
 
             if toolCalls.isEmpty {
                 return LoopResult(
-                    text: joinedRounds(completedRoundsText, text),
                     finalRoundText: text,
                     responseSegments: responseSegments,
                     usage: turnUsage
@@ -1339,7 +1329,6 @@ public final class LanguageModelSession: @unchecked Sendable {
                     ? responseSegments
                     : [.text(.init(content: text))]
                 appendEntry(.response(Transcript.Response(segments: segments)))
-                completedRoundsText = joinedRounds(completedRoundsText, text)
             }
 
             let transcriptCalls = try toolCalls.map { call in

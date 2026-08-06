@@ -25,7 +25,7 @@ swift build -Xswiftc -enable-library-evolution \
 python3 scripts/interface-diff.py reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 ```
 
-Current state: **0 gaps across 789 Apple declarations** (with a short,
+Current state: **0 gaps across 874 Apple declarations** (enum cases included — the gate now parses them; they carry no `public` keyword in swiftinterface and were previously invisible to it) (with a short,
 reasoned allowlist inside the script: macro-synthesized `PartiallyGenerated`
 types, the advisory Regex guide, and adapters off-macOS). Name-level
 `scripts/api-audit.py` additionally gates 151/151 types.

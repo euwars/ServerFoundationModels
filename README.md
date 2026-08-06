@@ -122,7 +122,7 @@ Gates 1 and 3 run in CI on every push; gates 2 and 4 run against live
 models (self-hosted macOS 27 runner / `OPENROUTER_API_KEY`).
 
 1. **Signature diff** — every public declaration in Apple's vendored
-   macOS 27 `.swiftinterface` (789 checked, Xcode 27 beta 4) must exist here with a
+   macOS 27 `.swiftinterface` (874 checked, Xcode 27 beta 4) must exist here with a
    matching signature: currently **0 gaps**.
 2. **One test suite, two libraries** — `TestScenarios/ParityScenarios.swift`
    compiles into two targets via symlink: identical code and assertions,

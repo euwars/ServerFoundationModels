@@ -131,28 +131,24 @@ extension LanguageModelSession {
         }
     }
 
-    /// Service-level failures surfaced by server-backed models.
+    /// Session misuse failures (SDK 27 beta): a second request while one is
+    /// in flight, or mutating the transcript mid-response. The session
+    /// throws `GenerationError.concurrentRequests` at runtime today —
+    /// matching the still-shipping behavior of Apple's framework — while
+    /// this type carries the surface its deprecation notices point to.
     public enum Error: LocalizedError, CustomDebugStringConvertible, Hashable {
-        case networkFailure(PrivateCloudComputeLanguageModel.Error.NetworkFailure)
-        case quotaLimitReached(PrivateCloudComputeLanguageModel.Error.QuotaLimitReached)
-        case serviceUnavailable(PrivateCloudComputeLanguageModel.Error.ServiceUnavailable)
-
-        public var debugDescription: String {
-            switch self {
-            case .networkFailure(let payload): return payload.debugDescription
-            case .quotaLimitReached(let payload): return payload.debugDescription
-            case .serviceUnavailable(let payload): return payload.debugDescription
-            }
-        }
+        case concurrentRequests
+        case transcriptMutationWhileResponding
 
         public var errorDescription: String? { debugDescription }
 
-        public static func == (lhs: Error, rhs: Error) -> Bool {
-            lhs.debugDescription == rhs.debugDescription
-        }
-
-        public func hash(into hasher: inout Hasher) {
-            hasher.combine(debugDescription)
+        public var debugDescription: String {
+            switch self {
+            case .concurrentRequests:
+                return "A generation request was made while another is still in flight."
+            case .transcriptMutationWhileResponding:
+                return "The transcript was mutated while a response was being generated."
+            }
         }
     }
 
