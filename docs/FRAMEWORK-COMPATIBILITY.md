@@ -4,11 +4,13 @@
 the author's one-off proof — not reproducible by readers without equivalent setup.*
 
 Proof, 2026-06-12, `swift:6.2` container with `10.0.0.200:8000` as a pure
-HTTP inference endpoint (`qwen3.6-35b-a3b`). Smoke servers live in
-`integration/`; each builds ServerFoundationModels as a path dependency and serves
-`GET /ask?q=` whose handler runs a `LanguageModelSession` against the
-remote model. Runners: `scripts/integration-hummingbird.sh`,
-`scripts/integration-vapor.sh` (mount repo at /src in a swift container).
+HTTP inference endpoint (`qwen3.6-35b-a3b`). The smoke servers used for this
+run built ServerFoundationModels as a path dependency and served
+`GET /ask?q=` whose handler ran a `LanguageModelSession` against the remote
+model. (They were removed with the bundled providers in the core-only
+restructuring; the findings below — especially the Vapor toolchain
+workaround, which has nothing to do with this package — remain valid for
+any consumer.)
 
 | Framework | Result | Notes |
 |---|---|---|
