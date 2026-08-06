@@ -112,8 +112,12 @@ stack with a one-line-per-file change: swap `import FoundationModels` for
 `import ServerFoundationModels`. Our surface is signature-compatible, so the
 bridge, executor, and its own tests compile unmodified. The cleanest pattern
 is a package trait that flips the import — see
-[euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels),
-whose full test suite passes under both backends, including on Linux.
+[euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
+(any OpenRouter model) and
+[euwars/foundation-models-utilities](https://github.com/euwars/foundation-models-utilities)
+(Apple's utilities surface: the Chat-Completions provider for Ollama / vLLM /
+any OpenAI-compatible endpoint, plus Skills) — both pass their full test
+suites under either backend.
 
 ## How parity is proven
 

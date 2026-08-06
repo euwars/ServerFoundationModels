@@ -54,11 +54,17 @@ real OpenRouter model (`OPENROUTER_API_KEY`) — on macOS or Linux.
 
 ## Layer 4 — Third-party consumer (real code, trait-swapped)
 
-[euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
-is a real provider package written against Apple's framework whose
-`ServerFoundationModels` trait swaps only the import. Its full test suite
-passes under both backends, including on Linux — every green run is a
-compile-and-behave proof over a genuine consumer.
+Real packages written against Apple's framework whose `ServerFoundationModels`
+trait swaps only the import — no shims, no source edits:
+
+- [euwars/OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
+  — full test suite passes under both backends, including on Linux.
+- [euwars/foundation-models-utilities](https://github.com/euwars/foundation-models-utilities)
+  — Apple's utilities surface (the Chat-Completions provider, Skills):
+  89/89 offline tests plus the live Ollama integration suite green under
+  the trait against v0.7.0.
+
+Every green run is a compile-and-behave proof over a genuine consumer.
 
 ## Layer 5 — Issue-derived regressions
 
