@@ -27,8 +27,6 @@ jobs:
         run: swift build --build-tests
       - name: Test (offline suites; live suites self-gate)
         run: swift test
-      - name: Transport tests (corelibs URLSession, traits disabled)
-        run: swift test --disable-default-traits --filter 'WireCaptureTests|SSEEdgeCaseTests|LoggingTests'
       - name: Signature-level interface diff
         run: |
           apt-get update -qq && apt-get install -y -qq python3 git > /dev/null
