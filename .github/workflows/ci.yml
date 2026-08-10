@@ -38,6 +38,20 @@ jobs:
           python3 scripts/interface-diff.py \
             reference/FoundationModels-macOS27.swiftinterface /tmp/ServerFoundationModels.swiftinterface
 
+  # Downstream builds must stay cheap: on toolchains with published
+  # swift-syntax prebuilts, consumers never compile swift-syntax from source.
+  # Guards the two properties that keep that true — the resolved swift-syntax
+  # version has prebuilts, and swift-syntax products stay off the library
+  # target. Pinned to swift:6.3.2 because prebuilt manifests are published per
+  # exact toolchain version (download.swift.org/prebuilts/swift-syntax/).
+  consumer-prebuilts:
+    runs-on: ubuntu-latest
+    container: swift:6.3.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consumer build uses prebuilt swift-syntax
+        run: bash scripts/consumer-prebuilts-check.sh
+
   # No hosted macOS job: the package targets the macOS 27 SDK (Xcode 27
   # beta), which GitHub-hosted images do not ship (macos-26 tops out at
   # Xcode 26.x). Darwin coverage runs on the self-hosted macos-parity job.

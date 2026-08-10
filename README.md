@@ -52,6 +52,17 @@ API, verified signature-for-signature against Apple's interface.
 > [euwars/foundation-models-utilities](https://github.com/euwars/foundation-models-utilities)
 > fork of Apple's utilities package do.
 
+> **Build cost.** A clean build of this dependency takes seconds, not minutes.
+> The only heavy dependency is swift-syntax (macro target), and on toolchains
+> with published prebuilts — Linux: Swift 6.3.2 release (`swift:6.3.2` image;
+> Ubuntu, Debian 12, RHEL UBI9, Amazon Linux 2, x86_64 + aarch64), macOS:
+> Xcode 26.5 / Xcode 27 beta — SwiftPM downloads a prebuilt swift-syntax
+> instead of compiling it (on by default; measured 21 s clean consumer build
+> on Apple Silicon). On toolchains without a published manifest for the
+> resolved swift-syntax version (e.g. `swift:6.2`), SwiftPM silently falls
+> back to compiling swift-syntax from source — still correct, just slower.
+> CI guards the prebuilt path via `scripts/consumer-prebuilts-check.sh`.
+
 ## Quick start
 
 Apple's on-device model doesn't exist off Apple platforms, so bring a model
@@ -191,7 +202,8 @@ With `OPENROUTER_API_KEY` set, the verify script adds the live bridge smoke.
 
 ## Requirements
 
-- Swift 6.2+ (Linux: `swift:6.2` Docker image or newer)
+- Swift 6.2+ (Linux: `swift:6.2` Docker image or newer; prefer `swift:6.3.2`
+  for prebuilt swift-syntax — see the build-cost note under Installation)
 - Apple platforms: macOS 27 / iOS 27 SDK (Xcode 27 beta) for the
   `SystemLanguageModel` bridge and the Apple-oracle test target
 - Command-Line Tools only (no full Xcode): set `SKIP_MACRO_TESTS=1` to skip
