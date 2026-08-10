@@ -29,14 +29,32 @@ API, verified signature-for-signature against Apple's interface.
 
 ## Installation
 
-```swift
-.package(url: "https://github.com/euwars/ServerFoundationModels.git", from: "0.1.0")
-```
+A complete minimal manifest for a server app (this package plus the
+OpenRouter provider used in Quick start):
 
 ```swift
-.target(name: "App", dependencies: [
-    .product(name: "ServerFoundationModels", package: "ServerFoundationModels"),
-])
+// swift-tools-version: 6.2
+import PackageDescription
+
+let package = Package(
+    name: "App",
+    // Required when building on a Mac — this package's platform floor is
+    // macOS 27, and SwiftPM refuses to link it into a lower-target consumer
+    // ("requires minimum platform version 27.0"). Ignored on Linux.
+    platforms: [.macOS("27.0")],
+    dependencies: [
+        .package(url: "https://github.com/euwars/ServerFoundationModels.git",
+                 from: "0.1.0"),
+        .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
+                 from: "0.1.0", traits: ["ServerFoundationModels"]),
+    ],
+    targets: [
+        .executableTarget(name: "App", dependencies: [
+            .product(name: "ServerFoundationModels", package: "ServerFoundationModels"),
+            .product(name: "OpenRouterForFoundationModels", package: "OpenrouterForFoundationModels"),
+        ]),
+    ]
+)
 ```
 
 > **Note — module aliasing.** A `moduleAliases: ["ServerFoundationModels":
@@ -66,14 +84,22 @@ API, verified signature-for-signature against Apple's interface.
 ## Quick start
 
 Apple's on-device model doesn't exist off Apple platforms, so bring a model
-through a provider package. [OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
-bridges any OpenRouter model to the `LanguageModel` protocol and compiles
-against this package via its `ServerFoundationModels` trait — on macOS and
-Linux alike:
+through a provider. Pick one:
+
+- **Any OpenRouter-hosted model** —
+  [OpenrouterForFoundationModels](https://github.com/euwars/OpenrouterForFoundationModels)
+  (used below; compiles against this package via its `ServerFoundationModels`
+  trait, on macOS and Linux alike).
+- **Ollama, vLLM, or any OpenAI-compatible endpoint** —
+  `ChatCompletionsLanguageModel` from
+  [foundation-models-utilities](https://github.com/euwars/foundation-models-utilities).
+- **Your own backend** — conform to `LanguageModel`/`LanguageModelExecutor`;
+  implement one method (`respond(to:model:streamingInto:)`) and the session
+  machinery — guided generation, tool loop, transcripts, streaming — is
+  provided by this library.
 
 ```swift
-// .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
-//          from: "0.1.0", traits: ["ServerFoundationModels"])
+import Foundation
 import ServerFoundationModels
 import OpenRouterForFoundationModels
 
@@ -101,11 +127,7 @@ let idea = try await session.respond(to: "Suggest a craft idea.", generating: Cr
 
 So do tools, streaming (`session.streamResponse`), transcripts, and
 profiles. On Apple platforms, `SystemLanguageModel` bridges to the real
-on-device model. Any package built for Apple's
-`LanguageModel`/`LanguageModelExecutor` protocols plugs in the same way —
-implement `respond(to:model:streamingInto:)` and the session machinery
-(guided generation, tool loop, transcripts, streaming snapshots) is provided
-by this library.
+on-device model.
 
 ## Profiling with Instruments (Xcode 27)
 
