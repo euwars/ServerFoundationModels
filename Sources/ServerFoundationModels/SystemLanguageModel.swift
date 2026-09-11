@@ -28,27 +28,48 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
 
     /// @unchecked Sendable invariant: the `.adapter` case may wrap Apple's
     /// non-Sendable adapter handle on iOS; access is read-only after init.
-    enum Variant: @unchecked Sendable {
+    enum Backing: @unchecked Sendable {
         case useCase(UseCase, Guardrails)
         case adapter(Adapter, Guardrails)
     }
 
-    let variant: Variant
+    let backing: Backing
 
     public init() {
-        self.variant = .useCase(.general, .default)
+        self.backing = .useCase(.general, .default)
     }
 
     public convenience init(useCase: UseCase = .general, guardrails: Guardrails = Guardrails.default) {
-        self.init(variant: .useCase(useCase, guardrails))
+        self.init(backing: .useCase(useCase, guardrails))
     }
 
     public convenience init(adapter: Adapter, guardrails: Guardrails = .default) {
-        self.init(variant: .adapter(adapter, guardrails))
+        self.init(backing: .adapter(adapter, guardrails))
     }
 
-    init(variant: Variant) {
-        self.variant = variant
+    init(backing: Backing) {
+        self.backing = backing
+    }
+
+    /// The on-device model generation backing this instance (SDK 27).
+    public struct Variant: Sendable, Hashable {
+        public let displayName: String
+
+        /// The base Apple Foundation Model, third generation.
+        public static var core3: Variant { Variant(displayName: "AFM 3 Core") }
+        /// The larger third-generation model on eligible hardware.
+        public static var coreAdvanced3: Variant { Variant(displayName: "AFM 3 Core Advanced") }
+    }
+
+    /// Which model variant serves this instance. On Apple platforms this is
+    /// read from the framework; elsewhere the on-device model does not exist
+    /// and the base variant is reported.
+    public var variant: Variant {
+        #if canImport(FoundationModels)
+        return Variant(displayName: FoundationModels.SystemLanguageModel.default.variant.displayName)
+        #else
+        return .core3
+        #endif
     }
 
     @frozen public enum Availability: Equatable, Sendable {
@@ -87,7 +108,7 @@ public final class SystemLanguageModel: Sendable, LanguageModel {
     }
 
     public var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration])
+        LanguageModelCapabilities([.toolCalling, .guidedGeneration])
     }
 
     public var executorConfiguration: Executor.Configuration {
@@ -298,7 +319,7 @@ extension SystemLanguageModel {
                 ? .permissiveContentTransformations
                 : .default
         }
-        switch variant {
+        switch backing {
         case .useCase(let useCase, let guardrails):
             if useCase == .general, guardrails.raw == "default" {
                 return .default

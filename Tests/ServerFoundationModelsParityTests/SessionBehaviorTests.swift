@@ -34,7 +34,6 @@ struct ScriptError: Error, Equatable {
 enum ScriptedResponseEvent: Sendable {
     case addAttachment(Transcript.AttachmentSegment)
     case removeAttachment(id: String)
-    case updateCustom(BehaviorCustomSegment)
 }
 
 /// One executor round the fake model plays back.
@@ -86,7 +85,7 @@ struct ScriptedModel: LanguageModel {
     let script: ScriptBox
 
     var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration])
+        LanguageModelCapabilities([.toolCalling, .guidedGeneration])
     }
 
     var executorConfiguration: Executor.Configuration { Executor.Configuration() }
@@ -117,8 +116,6 @@ struct ScriptedModel: LanguageModel {
                     await channel.send(.response(action: .addAttachmentSegment(segment)))
                 case .removeAttachment(let id):
                     await channel.send(.response(action: .removeAttachmentSegment(id: id)))
-                case .updateCustom(let segment):
-                    await channel.send(.response(action: .updateCustomSegment(segment)))
                 }
             }
             for fragment in round.textFragments {
@@ -192,21 +189,7 @@ private func segmentText(_ segments: [Transcript.Segment]) -> String {
     }.joined()
 }
 
-struct BehaviorCustomSegment: Transcript.CustomSegment, Equatable {
-    struct Content: Codable, Equatable, Sendable {
-        var value: String
-    }
-
-    let id: String
-    var content: Content
-
-    init(id: String, value: String) {
-        self.id = id
-        self.content = Content(value: value)
-    }
-}
-
-private func behaviorTestAttachment(id: String) -> Transcript.AttachmentSegment {
+private func behaviorTestAttachment(id: String, label: String? = nil) -> Transcript.AttachmentSegment {
     #if canImport(CoreGraphics)
     var pixel: UInt32 = 0xFF000000
     let data = Data(bytes: &pixel, count: 4)
@@ -224,11 +207,12 @@ private func behaviorTestAttachment(id: String) -> Transcript.AttachmentSegment 
         shouldInterpolate: false,
         intent: .defaultIntent
     )!
-    return Transcript.AttachmentSegment(id: id, content: .image(Transcript.ImageAttachment(image)))
+    return Transcript.AttachmentSegment(id: id, content: .image(Transcript.ImageAttachment(image)), label: label)
     #else
     return Transcript.AttachmentSegment(
         id: id,
-        content: .image(Transcript.ImageAttachment(data: Data([0x01])))
+        content: .image(Transcript.ImageAttachment(data: Data([0x01]))),
+        label: label
     )
     #endif
 }
@@ -500,7 +484,7 @@ struct SessionBehaviorTests {
 
         let request = script.recordedRequests.first
         #expect(request?.contextOptions.reasoningLevel == .deep)
-        #expect(request?.metadata["origin"] as? String == "behavior-test")
+        #expect(request?.metadata["origin"] == GeneratedContent("behavior-test"))
     }
 
     // MARK: Plain stream terminal snapshot
@@ -656,16 +640,17 @@ struct SessionBehaviorTests {
         #expect(entryText(reasoningEntry) == "thinking")
     }
 
-    @Test("custom segment index stays valid after attachment removal")
-    func customSegmentSurvivesAttachmentRemoval() async throws {
+    @Test("attachment segment indices stay valid after an earlier attachment is removed")
+    func attachmentIndicesSurviveRemoval() async throws {
         let script = ScriptBox(rounds: [
             ScriptedRound(
                 textFragments: ["done"],
                 responseEvents: [
                     .addAttachment(behaviorTestAttachment(id: "A")),
-                    .updateCustom(BehaviorCustomSegment(id: "C", value: "initial")),
+                    .addAttachment(behaviorTestAttachment(id: "B")),
                     .removeAttachment(id: "A"),
-                    .updateCustom(BehaviorCustomSegment(id: "C", value: "updated")),
+                    // Re-adding B must update it in place, not append a duplicate.
+                    .addAttachment(behaviorTestAttachment(id: "B", label: "updated")),
                 ]
             ),
         ])
@@ -681,16 +666,12 @@ struct SessionBehaviorTests {
             return
         }
 
-        let customSegments = response.segments.compactMap { segment -> BehaviorCustomSegment? in
-            guard case .custom(let custom) = segment else { return nil }
-            return custom as? BehaviorCustomSegment
+        let attachments = response.segments.compactMap { segment -> Transcript.AttachmentSegment? in
+            guard case .attachment(let attachment) = segment else { return nil }
+            return attachment
         }
-        #expect(customSegments.count == 1)
-        #expect(customSegments[0].content.value == "updated")
-        #expect(!response.segments.contains { segment in
-            if case .attachment = segment { return true }
-            return false
-        })
+        #expect(attachments.map(\.id) == ["B"])
+        #expect(attachments.first?.label == "updated")
     }
 
     @Test("single-line fenced JSON decodes on typed respond")

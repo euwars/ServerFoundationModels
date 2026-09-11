@@ -260,11 +260,11 @@ struct TranscriptFidelityTests {
         let a = Transcript.Response(id: "r", metadata: ["k": "v"], segments: segments)
         var b = a
         #expect(a == b)
-        b.metadata = ["k": "other"]
+        b.metadata = ["k": GeneratedContent("other")]
         #expect(a != b)
-        b.metadata = ["k": 42]  // same key, different erased type
+        b.metadata = ["k": GeneratedContent(42)]  // same key, different value kind
         #expect(a != b)
-        b.metadata = ["k": "v"]
+        b.metadata = ["k": GeneratedContent("v")]
         #expect(a == b)
         b.metadata = [:]
         #expect(a != b)
@@ -276,7 +276,7 @@ struct TranscriptFidelityTests {
         let callA = Transcript.ToolCall(id: "c", metadata: ["m": 1], toolName: "t", arguments: args)
         var callB = callA
         #expect(callA == callB)
-        callB.metadata = ["m": 2]
+        callB.metadata = ["m": GeneratedContent(2)]
         #expect(callA != callB)
 
         let reasonA = Transcript.Reasoning(
@@ -284,7 +284,7 @@ struct TranscriptFidelityTests {
         )
         var reasonB = reasonA
         #expect(reasonA == reasonB)
-        reasonB.metadata = ["m": false]
+        reasonB.metadata = ["m": GeneratedContent(false)]
         #expect(reasonA != reasonB)
     }
 
@@ -304,7 +304,7 @@ struct TranscriptFidelityTests {
         let newPrompt = Transcript.Entry.prompt(.init(id: "new-p", segments: [.text(.init(id: "s4", content: "new"))]))
         let newResponse = Transcript.Entry.response(.init(id: "new-r", segments: [.text(.init(id: "s5", content: "ok"))]))
 
-        transcript.history = [newInstructions, newPrompt, newResponse][...]
+        transcript.history = [newInstructions, newPrompt, newResponse]
 
         // The leading instructions entry was absorbed into the instructions
         // prefix; the getter returns only the conversation that follows it.
@@ -314,7 +314,7 @@ struct TranscriptFidelityTests {
         #expect(transcript.map(\.id) == ["ins-a", "ins-b", "new-p", "new-r"])
 
         // Assigning a value with no instructions round-trips exactly.
-        transcript.history = [newPrompt, newResponse][...]
+        transcript.history = [newPrompt, newResponse]
         #expect(Array(transcript.history) == [newPrompt, newResponse])
     }
 

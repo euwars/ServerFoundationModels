@@ -22,7 +22,7 @@ import Testing
 import ServerFoundationModels
 #elseif canImport(FoundationModels)
 import FoundationModels
-// Xcode 27 beta 4 dropped FoundationModelsUtilities from the SDK; the shared
+// Xcode 27 (since beta 4) ships no FoundationModelsUtilities in the SDK; the shared
 // scenarios only use core-surface symbols, so import it only where it exists.
 #if canImport(FoundationModelsUtilities)
 import FoundationModelsUtilities
@@ -950,7 +950,7 @@ struct ParityMockModel: LanguageModel {
     let events: [Event]
 
     var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities(capabilities: [.toolCalling])
+        LanguageModelCapabilities([.toolCalling])
     }
 
     var executorConfiguration: Executor.Configuration {

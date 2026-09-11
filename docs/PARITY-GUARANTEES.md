@@ -13,9 +13,8 @@ runner).
 ## Layer 1 — Signature-level interface diff (compile-time surface)
 
 `scripts/interface-diff.py` compares Apple's `.swiftinterface` (vendored at
-`reference/FoundationModels-macOS27.swiftinterface`, from Xcode 27 beta 4;
-the macOS surface is a strict subset of iOS 27's, which adds only
-`ImageReference.resolved(in:)`) against ServerFoundationModels's emitted
+`reference/FoundationModels-macOS27.swiftinterface`, from the Xcode 27.0 GM,
+27A266a) against ServerFoundationModels's emitted
 interface, declaration by declaration with normalized signatures.
 
 ```sh

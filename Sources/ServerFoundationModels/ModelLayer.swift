@@ -116,14 +116,8 @@ extension Tool where Arguments: Generable {
 public struct LanguageModelCapabilities: Sendable {
     let capabilities: Set<Capability>
 
-    public init(capabilities: [Capability]) {
-        self.capabilities = Set(capabilities)
-    }
-
-    /// Unlabeled convenience matching Apple's shipping initializer
-    /// (`LanguageModelCapabilities([.toolCalling, ...])`) — used by providers
-    /// such as ClaudeForFoundationModels. The reference `.swiftinterface`
-    /// only lists the labeled form, but the shipping SDK accepts both.
+    /// The shipping SDK 27 initializer. (The labeled `init(capabilities:)`
+    /// of the SDK 27 betas was removed in the release.)
     public init(_ capabilities: [Capability]) {
         self.capabilities = Set(capabilities)
     }
@@ -180,7 +174,7 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
     public var generationOptions: GenerationOptions
 
     public var contextOptions: ContextOptions = ContextOptions()
-    public var metadata: [String: any Sendable & Codable & Equatable] = [:]
+    public var metadata: [String: GeneratedContent] = [:]
 
     /// Callable tools, for executors that run the tool loop natively
     /// (e.g. the SystemLanguageModel bridge). Most executors emit
@@ -208,7 +202,7 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
         schema: GenerationSchema? = nil,
         generationOptions: GenerationOptions,
         contextOptions: ContextOptions,
-        metadata: [String: any Sendable & Codable & Equatable]
+        metadata: [String: any ConvertibleToGeneratedContent]
     ) {
         self.id = id
         self.transcript = transcript
@@ -216,7 +210,7 @@ public struct LanguageModelExecutorGenerationRequest: Sendable {
         self.schema = schema
         self.generationOptions = generationOptions
         self.contextOptions = contextOptions
-        self.metadata = metadata
+        self.metadata = metadata.mapValues { $0.generatedContent }
     }
 }
 

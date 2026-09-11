@@ -57,11 +57,11 @@ public final class SessionPropertyValues: @unchecked Sendable {
 
 extension SessionPropertyValues {
     public struct __Key_history: SessionPropertyKey {
-        public static var defaultValue: ArraySlice<Transcript.Entry> { [] }
+        public static var defaultValue: Transcript.HistoryView { [] }
     }
 
     /// The conversation history for the request being prepared.
-    public var history: ArraySlice<Transcript.Entry> {
+    public var history: Transcript.HistoryView {
         get { self[__Key_history.self] }
         set { self[__Key_history.self] = newValue }
     }

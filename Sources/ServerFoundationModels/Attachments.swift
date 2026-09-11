@@ -157,8 +157,8 @@ public struct ImageReference: Sendable, Equatable, Generable {
     }
 
     /// The attached image this reference points to, if present in the
-    /// transcript's attachment segments.
-    public func resolve(in transcript: Transcript) -> Transcript.ImageAttachment? {
+    /// attachment segments of the given entries.
+    public func resolved(in transcript: some Sequence<Transcript.Entry>) -> Transcript.ImageAttachment? {
         for entry in transcript {
             let segments: [Transcript.Segment]
             switch entry {
@@ -176,6 +176,11 @@ public struct ImageReference: Sendable, Equatable, Generable {
             }
         }
         return nil
+    }
+
+    @available(*, deprecated, renamed: "resolved(in:)")
+    public func resolve(in transcript: Transcript) -> Transcript.ImageAttachment? {
+        resolved(in: transcript)
     }
 
     public struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent, Equatable {
@@ -231,7 +236,7 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
     }
 
     public var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities(capabilities: [.toolCalling, .guidedGeneration, .reasoning, .vision])
+        LanguageModelCapabilities([.toolCalling, .guidedGeneration, .reasoning, .vision])
     }
 
     public var executorConfiguration: Executor.Configuration {
@@ -325,9 +330,13 @@ public final class PrivateCloudComputeLanguageModel: Sendable, LanguageModel {
         get async throws { 0 }
     }
 
-    public var supportedLanguages: Set<Locale.Language> { [] }
+    /// Async throwing (SDK 27), like `contextSize`: the real PCC model may
+    /// reach the network. Unavailable off-device here, so nothing is supported.
+    public var supportedLanguages: Set<Locale.Language> {
+        get async throws { [] }
+    }
 
-    public func supportsLocale(_ locale: Locale = Locale.current) -> Bool { false }
+    public func supportsLocale(_ locale: Locale = Locale.current) async throws -> Bool { false }
 
     public struct Executor: LanguageModelExecutor {
         public struct Configuration: Hashable, Sendable {

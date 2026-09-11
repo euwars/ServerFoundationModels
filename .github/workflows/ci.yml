@@ -50,8 +50,8 @@ jobs:
       - name: Consumer build uses prebuilt swift-syntax
         run: bash scripts/consumer-prebuilts-check.sh
 
-  # No hosted macOS job: the package targets the macOS 27 SDK (Xcode 27
-  # beta), which GitHub-hosted images do not ship (macos-26 tops out at
+  # No hosted macOS job: the package targets the macOS 27 SDK (Xcode 27),
+  # which GitHub-hosted images do not ship yet (macos-26 tops out at
   # Xcode 26.x). Darwin coverage runs on the self-hosted macos-parity job.
 
   # Full parity suite (both libraries, on-device model) runs on macOS 27

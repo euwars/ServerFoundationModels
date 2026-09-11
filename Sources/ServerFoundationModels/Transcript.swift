@@ -38,13 +38,13 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
     /// leading instructions entries (they are not lost — they remain in the
     /// transcript's instructions prefix). Assigning a value that does not
     /// start with instructions round-trips exactly.
-    public var history: ArraySlice<Entry> {
+    public var history: HistoryView {
         get {
             let start = entries.firstIndex { entry in
                 if case .instructions = entry { return false }
                 return true
             } ?? entries.endIndex
-            return entries[start...]
+            return HistoryView(entries[start...])
         }
         set {
             let start = entries.firstIndex { entry in
@@ -92,37 +92,14 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         case text(TextSegment)
         case structure(StructuredSegment)
         case attachment(AttachmentSegment)
-        case custom(any CustomSegment)
 
         public var id: String {
             switch self {
             case .text(let segment): return segment.id
             case .structure(let segment): return segment.id
             case .attachment(let segment): return segment.id
-            case .custom(let segment): return segment.id
             }
         }
-
-        public static func == (lhs: Segment, rhs: Segment) -> Bool {
-            switch (lhs, rhs) {
-            case (.text(let a), .text(let b)): return a == b
-            case (.structure(let a), .structure(let b)): return a == b
-            case (.attachment(let a), .attachment(let b)): return a == b
-            case (.custom(let a), .custom(let b)):
-                return a.isEqual(to: b)
-            default: return false
-            }
-        }
-    }
-
-    /// Executor-defined transcript segments (e.g. server-tool activity) that
-    /// replay verbatim on later requests.
-    public protocol CustomSegment: InstructionsRepresentable, PromptRepresentable,
-        CustomStringConvertible, Equatable, Identifiable, Sendable
-    where ID == String {
-        associatedtype Content: Decodable, Encodable, Equatable, Sendable
-        var id: String { get }
-        var content: Content { get }
     }
 
     public enum Attachment: Sendable, Equatable {
@@ -238,7 +215,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var options: GenerationOptions
         public var responseFormat: ResponseFormat?
         public var contextOptions: ContextOptions
-        public var metadata: [String: any Codable & Sendable & Equatable]
+        public var metadata: [String: GeneratedContent]
 
         public init(
             id: String = UUID().uuidString,
@@ -256,14 +233,14 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
         public init(
             id: String = UUID().uuidString,
-            metadata: [String: any Sendable & Codable & Equatable] = [:],
+            metadata: [String: any ConvertibleToGeneratedContent] = [:],
             segments: [Segment],
             options: GenerationOptions = GenerationOptions(),
             responseFormat: ResponseFormat? = nil,
             contextOptions: ContextOptions = ContextOptions()
         ) {
             self.id = id
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
             self.segments = segments
             self.options = options
             self.responseFormat = responseFormat
@@ -274,7 +251,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
             lhs.id == rhs.id && lhs.segments == rhs.segments
                 && lhs.options == rhs.options && lhs.responseFormat == rhs.responseFormat
                 && lhs.contextOptions == rhs.contextOptions
-                && metadataIsEqual(lhs.metadata, rhs.metadata)
+                && lhs.metadata == rhs.metadata
         }
     }
 
@@ -282,7 +259,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var id: String
         public var assetIDs: [String]
         public var segments: [Segment]
-        public var metadata: [String: any Codable & Sendable & Equatable]
+        public var metadata: [String: GeneratedContent]
 
         public init(
             id: String = UUID().uuidString,
@@ -297,18 +274,18 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
         public init(
             id: String = UUID().uuidString,
-            metadata: [String: any Sendable & Codable & Equatable] = [:],
+            metadata: [String: any ConvertibleToGeneratedContent] = [:],
             segments: [Segment]
         ) {
             self.id = id
             self.assetIDs = []
             self.segments = segments
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
         }
 
         public static func == (lhs: Response, rhs: Response) -> Bool {
             lhs.id == rhs.id && lhs.assetIDs == rhs.assetIDs && lhs.segments == rhs.segments
-                && metadataIsEqual(lhs.metadata, rhs.metadata)
+                && lhs.metadata == rhs.metadata
         }
     }
 
@@ -338,7 +315,7 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var id: String
         public var toolName: String
         public var arguments: GeneratedContent
-        public var metadata: [String: any Codable & Sendable & Equatable]
+        public var metadata: [String: GeneratedContent]
 
         public init(id: String, toolName: String, arguments: GeneratedContent) {
             self.id = id
@@ -349,19 +326,19 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
 
         public init(
             id: String,
-            metadata: [String: any Codable & Sendable & Equatable],
+            metadata: [String: any ConvertibleToGeneratedContent],
             toolName: String,
             arguments: GeneratedContent
         ) {
             self.id = id
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
             self.toolName = toolName
             self.arguments = arguments
         }
 
         public static func == (lhs: ToolCall, rhs: ToolCall) -> Bool {
             lhs.id == rhs.id && lhs.toolName == rhs.toolName && lhs.arguments == rhs.arguments
-                && metadataIsEqual(lhs.metadata, rhs.metadata)
+                && lhs.metadata == rhs.metadata
         }
     }
 
@@ -381,23 +358,23 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
         public var id: String
         public var segments: [Segment]
         public var signature: Data?
-        public var metadata: [String: any Codable & Sendable & Equatable]
+        public var metadata: [String: GeneratedContent]
 
         public init(
             id: String = UUID().uuidString,
-            metadata: [String: any Sendable & Codable & Equatable] = [:],
+            metadata: [String: any ConvertibleToGeneratedContent] = [:],
             segments: [Segment],
             signature: Data? = nil
         ) {
             self.id = id
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
             self.segments = segments
             self.signature = signature
         }
 
         public static func == (lhs: Reasoning, rhs: Reasoning) -> Bool {
             lhs.id == rhs.id && lhs.segments == rhs.segments && lhs.signature == rhs.signature
-                && metadataIsEqual(lhs.metadata, rhs.metadata)
+                && lhs.metadata == rhs.metadata
         }
     }
 
@@ -452,43 +429,83 @@ public struct Transcript: Sendable, Equatable, RandomAccessCollection {
     }
 }
 
-// MARK: - Erased metadata equality
-
-/// Pairwise erased equality for `metadata` dictionaries: same keys, and each
-/// pair of values equal after dynamically matching their concrete types
-/// (mirrors the `CustomSegment.isEqual` pattern).
-func metadataIsEqual(
-    _ lhs: [String: any Codable & Sendable & Equatable],
-    _ rhs: [String: any Codable & Sendable & Equatable]
-) -> Bool {
-    guard lhs.count == rhs.count else { return false }
-    for (key, lhsValue) in lhs {
-        guard let rhsValue = rhs[key], erasedEqual(lhsValue, rhsValue) else { return false }
-    }
-    return true
-}
-
-private func erasedEqual(_ lhs: any Equatable, _ rhs: any Equatable) -> Bool {
-    func open<Value: Equatable>(_ lhs: Value) -> Bool {
-        guard let rhs = rhs as? Value else { return false }
-        return lhs == rhs
-    }
-    return open(lhs)
-}
-
 extension [Transcript.Segment] {
     package var joinedText: String {
         compactMap { segment in
             switch segment {
             case .text(let text): return text.content
             case .structure(let structure): return structure.content.jsonString
-            case .custom(let custom): return custom.description
             case .attachment: return nil
             }
         }.joined(separator: "\n")
     }
 }
 
+
+// MARK: - HistoryView
+
+extension Transcript {
+    /// The conversation after any leading instructions, as a standalone
+    /// mutable collection (SDK 27). Indices are opaque and stable across
+    /// copies of the same view; `startIndex` is always the first entry.
+    public struct HistoryView: MutableCollection, RandomAccessCollection, RangeReplaceableCollection, Sendable {
+        public typealias Element = Entry
+        public typealias SubSequence = HistoryView
+        public typealias Indices = Range<Index>
+        public typealias Iterator = IndexingIterator<HistoryView>
+
+        var entries: [Entry]
+
+        public init() {
+            self.entries = []
+        }
+
+        public var startIndex: Index { Index(offset: entries.startIndex) }
+        public var endIndex: Index { Index(offset: entries.endIndex) }
+
+        public subscript(position: Index) -> Entry {
+            get { entries[position.offset] }
+            set { entries[position.offset] = newValue }
+        }
+
+        public subscript(bounds: Range<Index>) -> HistoryView {
+            get { HistoryView(entries[bounds.lowerBound.offset..<bounds.upperBound.offset]) }
+            set { entries.replaceSubrange(bounds.lowerBound.offset..<bounds.upperBound.offset, with: newValue.entries) }
+        }
+
+        public mutating func replaceSubrange<C>(
+            _ subrange: Range<Index>, with newElements: C
+        ) where C: Collection, C.Element == Entry {
+            entries.replaceSubrange(subrange.lowerBound.offset..<subrange.upperBound.offset, with: newElements)
+        }
+
+        public mutating func append(_ newElement: Entry) {
+            entries.append(newElement)
+        }
+
+        public mutating func append(contentsOf newElements: some Sequence<Entry>) {
+            entries.append(contentsOf: newElements)
+        }
+
+        public struct Index: Comparable, Hashable, Sendable, Strideable {
+            public typealias Stride = Int
+
+            let offset: Int
+
+            public static func < (lhs: Index, rhs: Index) -> Bool { lhs.offset < rhs.offset }
+            public func distance(to other: Index) -> Int { other.offset - offset }
+            public func advanced(by n: Int) -> Index { Index(offset: offset + n) }
+        }
+    }
+}
+
+extension Transcript.HistoryView: ExpressibleByArrayLiteral {
+    public typealias ArrayLiteralElement = Transcript.Entry
+
+    public init(arrayLiteral elements: Transcript.Entry...) {
+        self.entries = elements
+    }
+}
 
 // MARK: - Descriptions
 
@@ -511,7 +528,6 @@ extension Transcript.Segment: CustomStringConvertible {
         case .text(let segment): return segment.description
         case .structure(let segment): return segment.description
         case .attachment(let segment): return segment.description
-        case .custom(let segment): return segment.description
         }
     }
 }
@@ -560,39 +576,19 @@ extension Transcript.ToolOutput: CustomStringConvertible {
     public var description: String { "\(toolName) -> \(segments.map(\.description).joined(separator: "\n"))" }
 }
 
-// MARK: - CustomSegment defaults
-
-extension Transcript.CustomSegment {
-    public var description: String { String(describing: content) }
-
-    public var promptRepresentation: Prompt { Prompt(text: description) }
-    public var instructionsRepresentation: Instructions { Instructions(text: description) }
-
-    /// Type-erased equality, used when comparing segments.
-    public func isEqual(to other: any Transcript.CustomSegment) -> Bool {
-        guard let other = other as? Self else { return false }
-        return self == other
-    }
-}
-
 // MARK: - Codable
 
 /// Full-fidelity Codable for transcripts.
 ///
 /// Round-trips entry IDs, segment IDs, text and structured segments, tool
 /// definitions, generation options, response formats, context options, asset
-/// IDs, and reasoning signatures. Decoding also accepts the legacy flat
-/// format (role/id/text keys carrying joined segment text) emitted by
-/// earlier releases.
+/// IDs, reasoning signatures, and entry metadata (as JSON values). Decoding
+/// also accepts the legacy flat format (role/id/text keys carrying joined
+/// segment text) emitted by earlier releases, and tolerates the `custom`
+/// segment kind those releases could emit (decoded as a text segment
+/// carrying the replay text).
 ///
 /// Known limitations, each preserving as much as is representable:
-/// - The `metadata` dictionaries are `[String: any Codable & Sendable &
-///   Equatable]` existentials whose concrete types cannot be recovered when
-///   decoding, so metadata is not encoded and always decodes as `[:]`.
-/// - `.custom` segments encode their id and textual description (the same
-///   text used to replay them in prompts). Executor packages can round-trip
-///   via `subtype: "xai_server_tool"`. Other custom segment types decode as
-///   `.text` segments preserving the id and description.
 /// - Image attachments encode their id, label, orientation, and image bytes
 ///   (PNG-encoded on Darwin; the stored data on Linux). On Darwin the
 ///   decoded `CGImage` is a re-decoded copy of those bytes, equal by value
@@ -627,7 +623,7 @@ extension Transcript: Codable {
             case role, id, text, toolName, calls, arguments
             // Full-fidelity keys.
             case segments, toolDefinitions, options, responseFormat
-            case contextOptions, assetIDs, signature
+            case contextOptions, assetIDs, signature, metadata
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -638,6 +634,12 @@ extension Transcript: Codable {
             func encodeSegments(_ segments: [Transcript.Segment]) throws {
                 try container.encode(segments.map(EncodedSegment.init), forKey: .segments)
                 try container.encode(segments.map(\.description).joined(separator: "\n"), forKey: .text)
+            }
+
+            /// Metadata values are JSON-shaped, so they encode as plain JSON.
+            func encodeMetadata(_ metadata: [String: GeneratedContent]) throws {
+                guard !metadata.isEmpty else { return }
+                try container.encode(metadata.mapValues(\.node), forKey: .metadata)
             }
 
             switch entry {
@@ -653,21 +655,27 @@ extension Transcript: Codable {
                 try container.encode(value.options, forKey: .options)
                 try container.encodeIfPresent(value.responseFormat, forKey: .responseFormat)
                 try container.encode(value.contextOptions, forKey: .contextOptions)
+                try encodeMetadata(value.metadata)
             case .response(let value):
                 try container.encode("response", forKey: .role)
                 try container.encode(value.id, forKey: .id)
                 try encodeSegments(value.segments)
                 try container.encode(value.assetIDs, forKey: .assetIDs)
+                try encodeMetadata(value.metadata)
             case .reasoning(let value):
                 try container.encode("reasoning", forKey: .role)
                 try container.encode(value.id, forKey: .id)
                 try encodeSegments(value.segments)
                 try container.encodeIfPresent(value.signature, forKey: .signature)
+                try encodeMetadata(value.metadata)
             case .toolCalls(let value):
                 try container.encode("toolCalls", forKey: .role)
                 try container.encode(value.id, forKey: .id)
                 try container.encode(value.calls.map { call in
-                    EncodedToolCall(id: call.id, toolName: call.toolName, arguments: call.arguments.jsonString)
+                    EncodedToolCall(
+                        id: call.id, toolName: call.toolName, arguments: call.arguments.jsonString,
+                        metadata: call.metadata.isEmpty ? nil : call.metadata.mapValues(\.node)
+                    )
                 }, forKey: .calls)
             case .toolOutput(let value):
                 try container.encode("toolOutput", forKey: .role)
@@ -692,6 +700,11 @@ extension Transcript: Codable {
                 return [.text(.init(content: try container.decodeIfPresent(String.self, forKey: .text) ?? ""))]
             }
 
+            func metadata() throws -> [String: GeneratedContent] {
+                (try container.decodeIfPresent([String: JSONNode].self, forKey: .metadata) ?? [:])
+                    .mapValues { GeneratedContent(node: $0) }
+            }
+
             switch role {
             case "instructions":
                 entry = .instructions(.init(
@@ -704,6 +717,7 @@ extension Transcript: Codable {
             case "prompt":
                 entry = .prompt(.init(
                     id: id,
+                    metadata: try metadata(),
                     segments: try segments(),
                     options: try container.decodeIfPresent(GenerationOptions.self, forKey: .options)
                         ?? GenerationOptions(),
@@ -714,14 +728,17 @@ extension Transcript: Codable {
                         ?? ContextOptions()
                 ))
             case "response":
-                entry = .response(.init(
+                var response = Transcript.Response(
                     id: id,
                     assetIDs: try container.decodeIfPresent([String].self, forKey: .assetIDs) ?? [],
                     segments: try segments()
-                ))
+                )
+                response.metadata = try metadata()
+                entry = .response(response)
             case "reasoning":
                 entry = .reasoning(.init(
                     id: id,
+                    metadata: try metadata(),
                     segments: try segments(),
                     signature: try container.decodeIfPresent(Data.self, forKey: .signature)
                 ))
@@ -730,6 +747,7 @@ extension Transcript: Codable {
                 entry = .toolCalls(.init(id: id, calls: try calls.map {
                     Transcript.ToolCall(
                         id: $0.id,
+                        metadata: ($0.metadata ?? [:]).mapValues { GeneratedContent(node: $0) },
                         toolName: $0.toolName,
                         arguments: try GeneratedContent(json: $0.arguments)
                     )
@@ -751,12 +769,13 @@ extension Transcript: Codable {
             var id: String
             var toolName: String
             var arguments: String
+            var metadata: [String: JSONNode]?
         }
     }
 
     /// One transcript segment in its serialized form. See the limitations
-    /// documented on `Transcript`'s Codable conformance for `.custom` and
-    /// `.attachment` segments.
+    /// documented on `Transcript`'s Codable conformance for `.attachment`
+    /// segments and the legacy `custom` kind.
     struct EncodedSegment: Codable {
         var kind: String
         var id: String
@@ -792,10 +811,6 @@ extension Transcript: Codable {
                     data = image.data
                     #endif
                 }
-            case .custom(let custom):
-                kind = "custom"
-                id = custom.id
-                content = custom.description
             }
         }
 
@@ -833,8 +848,8 @@ extension Transcript: Codable {
                 return .attachment(.init(id: id, content: .image(.init(data: data)), label: label))
                 #endif
             case "custom":
-                // Custom segment types are executor-defined; decoding preserves
-                // their replay text as a text segment.
+                // Emitted by earlier releases (SDK 27 betas had executor-defined
+                // custom segments); their replay text survives as a text segment.
                 return .text(.init(id: id, content: content ?? ""))
             default:
                 throw DecodingError.dataCorrupted(.init(

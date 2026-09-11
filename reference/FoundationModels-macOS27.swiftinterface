@@ -1,6 +1,6 @@
 // swift-interface-format-version: 1.0
-// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.27.1 clang-2100.3.27.1)
-// swift-module-flags: -target arm64e-apple-macos27.0 -target-variant arm64e-apple-ios27.0-macabi -enable-objc-interop -enable-library-evolution -language-mode 6 -O -library-level api -enable-upcoming-feature InternalImportsByDefault -enable-upcoming-feature NonisolatedNonsendingByDefault -enable-upcoming-feature MemberImportVisibility -enable-experimental-feature DebugDescriptionMacro -user-module-version 2.0.62.1.402 -module-name FoundationModels -package-name com.apple.foundationmodels
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.31.4 clang-2100.3.31.1)
+// swift-module-flags: -target arm64e-apple-macos27.0 -target-variant arm64e-apple-ios27.0-macabi -enable-objc-interop -target-arch-variant arm64e.x1 -enable-library-evolution -language-mode 6 -O -library-level api -enable-upcoming-feature InternalImportsByDefault -enable-upcoming-feature NonisolatedNonsendingByDefault -enable-upcoming-feature MemberImportVisibility -enable-experimental-feature DebugDescriptionMacro -user-module-version 2.0.68.1.402 -module-name FoundationModels -package-name com.apple.foundationmodels
 // swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.4
 public import CoreGraphics
 public import CoreImage
@@ -140,10 +140,14 @@ extension FoundationModels::PrivateCloudComputeLanguageModel {
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::PrivateCloudComputeLanguageModel {
-  final public var supportedLanguages: Swift::Set<Foundation::Locale.Foundation::Language> {
-    get
+  #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
+  nonisolated(nonsending) final public var supportedLanguages: Swift::Set<Foundation::Locale.Foundation::Language> {
+    get async throws
   }
-  final public func supportsLocale(_ locale: Foundation::Locale = Locale.current) -> Swift::Bool
+  #endif
+  #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
+  nonisolated(nonsending) final public func supportsLocale(_ locale: Foundation::Locale = Locale.current) async throws -> Swift::Bool
+  #endif
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -454,6 +458,47 @@ extension FoundationModels::SystemLanguageModel {
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
   @usableFromInline
   final internal var _contextSize: Swift::Int {
+    get
+  }
+}
+@available(tvOS, unavailable)
+@available(watchOS, unavailable)
+extension FoundationModels::SystemLanguageModel {
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+  @available(tvOS, unavailable)
+  @available(watchOS, unavailable)
+  final public var variant: FoundationModels::SystemLanguageModel.FoundationModels::Variant {
+    get
+  }
+}
+@available(tvOS, unavailable)
+@available(watchOS, unavailable)
+extension FoundationModels::SystemLanguageModel {
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+  @available(tvOS, unavailable)
+  @available(watchOS, unavailable)
+  public struct Variant : Swift::Sendable, Swift::Hashable {
+    public let displayName: Swift::String
+    public static func == (a: FoundationModels::SystemLanguageModel.FoundationModels::Variant, b: FoundationModels::SystemLanguageModel.FoundationModels::Variant) -> Swift::Bool
+    public func hash(into hasher: inout Swift::Hasher)
+    public var hashValue: Swift::Int {
+      get
+    }
+  }
+}
+@available(tvOS, unavailable)
+@available(watchOS, unavailable)
+extension FoundationModels::SystemLanguageModel.FoundationModels::Variant {
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+  @available(tvOS, unavailable)
+  @available(watchOS, unavailable)
+  public static var core3: FoundationModels::SystemLanguageModel.FoundationModels::Variant {
+    get
+  }
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+  @available(tvOS, unavailable)
+  @available(watchOS, unavailable)
+  public static var coreAdvanced3: FoundationModels::SystemLanguageModel.FoundationModels::Variant {
     get
   }
 }
@@ -1024,10 +1069,9 @@ extension FoundationModels::LanguageModelSession.FoundationModels::DynamicProfil
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::SessionPropertyValues {
-  final public var history: Swift::ArraySlice<FoundationModels::Transcript.FoundationModels::Entry> {
+  final public var history: FoundationModels::Transcript.FoundationModels::HistoryView {
     get
     set
-    _modify
   }
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
@@ -1077,7 +1121,6 @@ extension FoundationModels::Instructions : FoundationModels::DynamicInstructions
   public typealias Body = @_opaqueReturnTypeOf("$s16FoundationModels12InstructionsV4bodyQrvp", 0) __
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-@available(watchOS, unavailable)
 @available(tvOS, unavailable)
 extension FoundationModels::LanguageModelSession {
   convenience public init(model: some LanguageModel = SystemLanguageModel.default, dynamicInstructions: sending some DynamicInstructions, history: some Collection<Transcript.Entry> = [])
@@ -1445,8 +1488,6 @@ public protocol LanguageModel : Swift::Sendable {
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 public struct LanguageModelCapabilities : Swift::Sendable {
-  @available(*, deprecated, renamed: "init(_:)")
-  public init(capabilities: [FoundationModels::LanguageModelCapabilities.FoundationModels::Capability])
   public init(_ capabilities: [FoundationModels::LanguageModelCapabilities.FoundationModels::Capability])
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
@@ -1729,13 +1770,13 @@ extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationMod
 @available(tvOS, unavailable)
 extension FoundationModels::LanguageModelExecutorGenerationChannel {
   public struct Metadata : Swift::Sendable {
-    public var values: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]
+    public var values: [Swift::String : FoundationModels::GeneratedContent]
   }
   public struct Usage : Swift::Sendable {
     public var input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input
     public var output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output
-    public var metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]
-    public init(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:])
+    public var metadata: [Swift::String : FoundationModels::GeneratedContent]
+    public init(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:])
   }
   public struct TextFragment : Swift::Sendable {
     public var content: Swift::String
@@ -1816,25 +1857,24 @@ extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationMod
 extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action {
   public static func appendText(_ text: Swift::String, segmentID: Swift::String? = nil, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
   public static func replaceTextSegment(_ text: Swift::String, segmentID: Swift::String? = nil, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
-  public static func updateCustomSegment(_ segment: any FoundationModels::Transcript.FoundationModels::CustomSegment) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
   public static func addAttachmentSegment(_ segment: FoundationModels::Transcript.FoundationModels::AttachmentSegment) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
   public static func removeAttachmentSegment(id: Swift::String) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
-  public static func updateMetadata(_ values: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
-  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
+  public static func updateMetadata(_ values: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
+  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Response.FoundationModels::Action
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action {
   public static func toolCall(id: Swift::String, name: Swift::String, action: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::ToolCall.FoundationModels::Action) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
   public static func removeToolCall(id: Swift::String) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
-  public static func updateMetadata(_ values: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
-  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
+  public static func updateMetadata(_ values: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
+  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::Action
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::ToolCall.FoundationModels::Action {
   public static func appendArguments(_ content: Swift::String, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::ToolCall.FoundationModels::Action
-  public static func updateMetadata(_ values: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::ToolCall.FoundationModels::Action
+  public static func updateMetadata(_ values: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::ToolCalls.FoundationModels::ToolCall.FoundationModels::Action
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -1842,8 +1882,8 @@ extension FoundationModels::LanguageModelExecutorGenerationChannel.FoundationMod
   public static func appendText(_ text: Swift::String, segmentID: Swift::String? = nil, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
   public static func replaceTextSegment(_ text: Swift::String, segmentID: Swift::String? = nil, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
   public static func updateSignature(_ signature: Foundation::Data, tokenCount: Swift::Int) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
-  public static func updateMetadata(_ values: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
-  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
+  public static func updateMetadata(_ values: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
+  public static func updateUsage(input: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> FoundationModels::LanguageModelExecutorGenerationChannel.FoundationModels::Reasoning.FoundationModels::Action
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -1854,12 +1894,12 @@ public struct LanguageModelExecutorGenerationRequest : Swift::Sendable {
   public var schema: FoundationModels::GenerationSchema?
   public var generationOptions: FoundationModels::GenerationOptions
   public var contextOptions: FoundationModels::ContextOptions
-  public var metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable]
+  public var metadata: [Swift::String : FoundationModels::GeneratedContent]
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::LanguageModelExecutorGenerationRequest {
-  public init(id: Foundation::UUID, transcript: FoundationModels::Transcript, enabledTools: [FoundationModels::Transcript.FoundationModels::ToolDefinition], schema: FoundationModels::GenerationSchema? = nil, generationOptions: FoundationModels::GenerationOptions, contextOptions: FoundationModels::ContextOptions, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable])
+  public init(id: Foundation::UUID, transcript: FoundationModels::Transcript, enabledTools: [FoundationModels::Transcript.FoundationModels::ToolDefinition], schema: FoundationModels::GenerationSchema? = nil, generationOptions: FoundationModels::GenerationOptions, contextOptions: FoundationModels::ContextOptions, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent])
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -1945,8 +1985,8 @@ extension FoundationModels::LanguageModelSession {
   public struct Usage : Swift::Sendable {
     public var input: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Input
     public var output: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Output
-    public var metadata: [Swift::String : any Swift::Sendable]
-    public init(input: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:])
+    public var metadata: [Swift::String : FoundationModels::GeneratedContent]
+    public init(input: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Input, output: FoundationModels::LanguageModelSession.FoundationModels::Usage.FoundationModels::Output, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:])
   }
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
@@ -2021,31 +2061,31 @@ extension FoundationModels::LanguageModelSession {
   final public func streamResponse<Content>(generating type: Content.Type = Content.self, includeSchemaInPrompt: Swift::Bool = true, options: FoundationModels::GenerationOptions = GenerationOptions(), @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  final public func streamResponse(to prompt: FoundationModels::Prompt, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
+  final public func streamResponse(to prompt: FoundationModels::Prompt, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  @_disfavoredOverload final public func streamResponse(to prompt: Swift::String, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
+  @_disfavoredOverload final public func streamResponse(to prompt: Swift::String, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  final public func streamResponse(options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
+  final public func streamResponse(options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Swift::String>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  @_disfavoredOverload final public func streamResponse(to prompt: FoundationModels::Prompt, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
+  @_disfavoredOverload final public func streamResponse(to prompt: FoundationModels::Prompt, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  @_disfavoredOverload final public func streamResponse(to prompt: Swift::String, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
+  @_disfavoredOverload final public func streamResponse(to prompt: Swift::String, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  @_disfavoredOverload final public func streamResponse(schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
+  @_disfavoredOverload final public func streamResponse(schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<FoundationModels::GeneratedContent>
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  final public func streamResponse<Content>(to prompt: FoundationModels::Prompt, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
+  final public func streamResponse<Content>(to prompt: FoundationModels::Prompt, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  @_disfavoredOverload final public func streamResponse<Content>(to prompt: Swift::String, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
+  @_disfavoredOverload final public func streamResponse<Content>(to prompt: Swift::String, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  final public func streamResponse<Content>(generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
+  final public func streamResponse<Content>(generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) rethrows -> sending FoundationModels::LanguageModelSession.FoundationModels::ResponseStream<Content> where Content : FoundationModels::Generable
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @discardableResult
   nonisolated(nonsending) final public func respond(to prompt: FoundationModels::Prompt, options: FoundationModels::GenerationOptions = GenerationOptions()) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
@@ -2086,55 +2126,55 @@ extension FoundationModels::LanguageModelSession {
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  nonisolated(nonsending) final public func respond(to prompt: FoundationModels::Prompt, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
+  nonisolated(nonsending) final public func respond(to prompt: FoundationModels::Prompt, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: Swift::String, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
+  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: Swift::String, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  nonisolated(nonsending) final public func respond(options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
+  nonisolated(nonsending) final public func respond(options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Swift::String>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: FoundationModels::Prompt, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
+  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: FoundationModels::Prompt, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: Swift::String, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
+  @_disfavoredOverload nonisolated(nonsending) final public func respond(to prompt: Swift::String, schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  @_disfavoredOverload nonisolated(nonsending) final public func respond(schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
+  @_disfavoredOverload nonisolated(nonsending) final public func respond(schema: FoundationModels::GenerationSchema, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<FoundationModels::GeneratedContent>
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  nonisolated(nonsending) final public func respond<Content>(to prompt: FoundationModels::Prompt, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
+  nonisolated(nonsending) final public func respond<Content>(to prompt: FoundationModels::Prompt, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  @_disfavoredOverload nonisolated(nonsending) final public func respond<Content>(to prompt: Swift::String, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
+  @_disfavoredOverload nonisolated(nonsending) final public func respond<Content>(to prompt: Swift::String, generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:]) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
   #endif
   #if compiler(>=5.3) && $AsyncExecutionBehaviorAttributes
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
   @discardableResult
-  nonisolated(nonsending) final public func respond<Content>(generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
+  nonisolated(nonsending) final public func respond<Content>(generating type: Content.Type = Content.self, options: FoundationModels::GenerationOptions = GenerationOptions(), contextOptions: FoundationModels::ContextOptions = ContextOptions(includeSchemaInPrompt: true), metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], @FoundationModels::PromptBuilder prompt: () throws -> FoundationModels::Prompt) async throws -> FoundationModels::LanguageModelSession.FoundationModels::Response<Content> where Content : FoundationModels::Generable
   #endif
 }
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
@@ -2251,9 +2291,6 @@ extension FoundationModels::Transcript {
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @available(tvOS, unavailable)
     case attachment(FoundationModels::Transcript.FoundationModels::AttachmentSegment)
-    @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-    @available(tvOS, unavailable)
-    case custom(any FoundationModels::Transcript.FoundationModels::CustomSegment)
     @available(macOS 26.0, iOS 26.0, watchOS 27.0, visionOS 26.0, *)
     @available(tvOS, unavailable)
     public typealias ID = Swift::String
@@ -2288,6 +2325,8 @@ extension FoundationModels::Transcript {
     @available(iOS, deprecated: 27.0, renamed: "schemaName")
     @available(macOS, deprecated: 27.0, renamed: "schemaName")
     @available(visionOS, deprecated: 27.0, renamed: "schemaName")
+    @available(tvOS, unavailable)
+    @available(watchOS, unavailable)
     public var source: Swift::String
     public var content: FoundationModels::GeneratedContent {
       get
@@ -2296,6 +2335,8 @@ extension FoundationModels::Transcript {
     @available(iOS, deprecated: 27.0, renamed: "init(id:schemaName:content:)")
     @available(macOS, deprecated: 27.0, renamed: "init(id:schemaName:content:)")
     @available(visionOS, deprecated: 27.0, renamed: "init(id:schemaName:content:)")
+    @available(tvOS, unavailable)
+    @available(watchOS, unavailable)
     public init(id: Swift::String = UUID().uuidString, source: Swift::String, content: FoundationModels::GeneratedContent)
     public static func == (a: FoundationModels::Transcript.FoundationModels::StructuredSegment, b: FoundationModels::Transcript.FoundationModels::StructuredSegment) -> Swift::Bool
     @available(macOS 26.0, iOS 26.0, watchOS 27.0, visionOS 26.0, *)
@@ -2335,8 +2376,8 @@ extension FoundationModels::Transcript {
 @available(tvOS, unavailable)
 extension FoundationModels::Transcript {
   public enum Attachment : Swift::Sendable, Swift::Equatable {
+    public static func == (lhs: FoundationModels::Transcript.FoundationModels::Attachment, rhs: FoundationModels::Transcript.FoundationModels::Attachment) -> Swift::Bool
     case image(FoundationModels::Transcript.FoundationModels::ImageAttachment)
-    public static func == (a: FoundationModels::Transcript.FoundationModels::Attachment, b: FoundationModels::Transcript.FoundationModels::Attachment) -> Swift::Bool
   }
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
@@ -2418,11 +2459,11 @@ extension FoundationModels::Transcript {
     public var contextOptions: FoundationModels::ContextOptions
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @available(tvOS, unavailable)
-    public var metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable]
+    public var metadata: [Swift::String : FoundationModels::GeneratedContent]
     public var responseFormat: FoundationModels::Transcript.FoundationModels::ResponseFormat?
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @available(tvOS, unavailable)
-    public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment], options: FoundationModels::GenerationOptions = GenerationOptions(), responseFormat: FoundationModels::Transcript.FoundationModels::ResponseFormat? = nil, contextOptions: FoundationModels::ContextOptions = ContextOptions())
+    public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment], options: FoundationModels::GenerationOptions = GenerationOptions(), responseFormat: FoundationModels::Transcript.FoundationModels::ResponseFormat? = nil, contextOptions: FoundationModels::ContextOptions = ContextOptions())
     @available(macOS 26.0, iOS 26.0, watchOS 27.0, visionOS 26.0, *)
     @available(tvOS, unavailable)
     public typealias ID = Swift::String
@@ -2519,7 +2560,7 @@ extension FoundationModels::Transcript {
     }
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @available(tvOS, unavailable)
-    public var metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable]
+    public var metadata: [Swift::String : FoundationModels::GeneratedContent]
     @available(macOS 26.0, iOS 26.0, watchOS 27.0, visionOS 26.0, *)
     @available(tvOS, unavailable)
     public typealias ID = Swift::String
@@ -2531,7 +2572,7 @@ extension FoundationModels::Transcript.FoundationModels::ToolCall {
   public init(id: Swift::String, toolName: Swift::String, arguments: FoundationModels::GeneratedContent)
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  public init(id: Swift::String, metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable], toolName: Swift::String, arguments: FoundationModels::GeneratedContent)
+  public init(id: Swift::String, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent], toolName: Swift::String, arguments: FoundationModels::GeneratedContent)
   public static func == (lhs: FoundationModels::Transcript.FoundationModels::ToolCall, rhs: FoundationModels::Transcript.FoundationModels::ToolCall) -> Swift::Bool
 }
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
@@ -2556,7 +2597,7 @@ extension FoundationModels::Transcript {
     public var assetIDs: [Swift::String]
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @usableFromInline
-    internal var _metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable]
+    internal var _metadata: [Swift::String : FoundationModels::GeneratedContent]
     public var segments: [FoundationModels::Transcript.FoundationModels::Segment]
     @available(macOS 26.0, iOS 26.0, watchOS 27.0, visionOS 26.0, *)
     @available(tvOS, unavailable)
@@ -2569,29 +2610,20 @@ extension FoundationModels::Transcript.FoundationModels::Response {
   @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
   @backDeployed(before: iOS 27.0, macOS 27.0, visionOS 27.0)
   @available(tvOS, unavailable)
-  public var metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable] {
+  public var metadata: [Swift::String : FoundationModels::GeneratedContent] {
     get {
     if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
       _metadata
     } else {
-      ["assetIDs": assetIDs]
+      ["assetIDs": GeneratedContent(assetIDs)]
     }
   }
   }
   public init(id: Swift::String = UUID().uuidString, assetIDs: [Swift::String], segments: [FoundationModels::Transcript.FoundationModels::Segment])
   @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
   @available(tvOS, unavailable)
-  public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment])
+  public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment])
   public static func == (lhs: FoundationModels::Transcript.FoundationModels::Response, rhs: FoundationModels::Transcript.FoundationModels::Response) -> Swift::Bool
-}
-@available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-@available(tvOS, unavailable)
-extension FoundationModels::Transcript {
-  public protocol CustomSegment : FoundationModels::InstructionsRepresentable, FoundationModels::PromptRepresentable, Swift::CustomStringConvertible, Swift::Equatable, Swift::Identifiable, Swift::Sendable {
-    associatedtype Content : Swift::Decodable, Swift::Encodable, Swift::Equatable, Swift::Sendable
-    var id: Swift::String { get }
-    var content: Self.Content { get }
-  }
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -2600,8 +2632,8 @@ extension FoundationModels::Transcript {
     public var id: Swift::String
     public var segments: [FoundationModels::Transcript.FoundationModels::Segment]
     public var signature: Foundation::Data?
-    public var metadata: [Swift::String : any Swift::Codable & Swift::Sendable & Swift::Equatable]
-    public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any Swift::Sendable & Swift::Codable & Swift::Equatable] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment], signature: Foundation::Data? = nil)
+    public var metadata: [Swift::String : FoundationModels::GeneratedContent]
+    public init(id: Swift::String = UUID().uuidString, metadata: [Swift::String : any FoundationModels::ConvertibleToGeneratedContent] = [:], segments: [FoundationModels::Transcript.FoundationModels::Segment], signature: Foundation::Data? = nil)
     @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
     @available(tvOS, unavailable)
     public typealias ID = Swift::String
@@ -2628,21 +2660,67 @@ extension FoundationModels::Transcript : Swift::RangeReplaceableCollection {
   public init()
   public mutating func replaceSubrange<C>(_ subrange: Swift::Range<Swift::Int>, with newElements: consuming C) where C : Swift::Collection, C.Element == FoundationModels::Transcript.FoundationModels::Entry
 }
-@available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
-extension FoundationModels::Transcript.FoundationModels::CustomSegment {
-  public var promptRepresentation: FoundationModels::Prompt {
+extension FoundationModels::Transcript {
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+  @available(tvOS, unavailable)
+  public struct HistoryView : Swift::MutableCollection, Swift::RandomAccessCollection, Swift::RangeReplaceableCollection, Swift::Sendable {
+    public typealias Element = FoundationModels::Transcript.FoundationModels::Entry
+    public typealias SubSequence = FoundationModels::Transcript.FoundationModels::HistoryView
+    public init()
+    public var startIndex: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index {
+      get
+    }
+    public var endIndex: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index {
+      get
+    }
+    public subscript(position: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index) -> FoundationModels::Transcript.FoundationModels::Entry {
+      get
+      set
+    }
+    public subscript(bounds: Swift::Range<FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index>) -> FoundationModels::Transcript.FoundationModels::HistoryView {
+      get
+      set
+    }
+    public mutating func replaceSubrange<C>(_ subrange: Swift::Range<FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index>, with newElements: C) where C : Swift::Collection, C.Element == FoundationModels::Transcript.FoundationModels::Entry
+    public mutating func append(_ newElement: FoundationModels::Transcript.FoundationModels::Entry)
+    public mutating func append(contentsOf newElements: some Sequence<Entry>)
+    @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
+    @available(tvOS, unavailable)
+    public typealias Indices = Swift::Range<FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index>
+    @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
+    @available(tvOS, unavailable)
+    public typealias Iterator = Swift::IndexingIterator<FoundationModels::Transcript.FoundationModels::HistoryView>
+  }
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+  @available(tvOS, unavailable)
+  public var history: FoundationModels::Transcript.FoundationModels::HistoryView {
     get
+    set
+  }
+}
+@available(tvOS, unavailable)
+extension FoundationModels::Transcript.FoundationModels::HistoryView {
+  @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+  @available(tvOS, unavailable)
+  public struct Index : Swift::Comparable, Swift::Hashable, Swift::Sendable, Swift::Strideable {
+    public static func < (lhs: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index, rhs: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index) -> Swift::Bool
+    public func distance(to other: FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index) -> Swift::Int
+    public func advanced(by n: Swift::Int) -> FoundationModels::Transcript.FoundationModels::HistoryView.FoundationModels::Index
+    @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
+    @available(tvOS, unavailable)
+    public typealias Stride = Swift::Int
+    public func hash(into hasher: inout Swift::Hasher)
+    public var hashValue: Swift::Int {
+      get
+    }
   }
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
-extension FoundationModels::Transcript {
-  public var history: Swift::ArraySlice<FoundationModels::Transcript.FoundationModels::Entry> {
-    _read
-    set
-    _modify
-  }
+extension FoundationModels::Transcript.FoundationModels::HistoryView : Swift::ExpressibleByArrayLiteral {
+  public typealias ArrayLiteralElement = FoundationModels::Transcript.FoundationModels::Entry
+  public init(arrayLiteral elements: FoundationModels::Transcript.FoundationModels::Entry...)
 }
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
@@ -2674,13 +2752,6 @@ extension FoundationModels::Transcript.FoundationModels::StructuredSegment : Swi
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::Transcript.FoundationModels::AttachmentSegment : Swift::CustomStringConvertible {
-  public var description: Swift::String {
-    get
-  }
-}
-@available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-@available(tvOS, unavailable)
-extension FoundationModels::Transcript.FoundationModels::CustomSegment {
   public var description: Swift::String {
     get
   }
@@ -2824,13 +2895,6 @@ extension Swift::Array : FoundationModels::InstructionsRepresentable where Eleme
     get
   }
 }
-@available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-@available(tvOS, unavailable)
-extension FoundationModels::Transcript.FoundationModels::CustomSegment {
-  public var instructionsRepresentation: FoundationModels::Instructions {
-    get
-  }
-}
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 @_functionBuilder public struct InstructionsBuilder {
@@ -2959,7 +3023,7 @@ public struct ImageReference : Swift::Sendable, Swift::Equatable {
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)
 extension FoundationModels::ImageReference {
-  public func resolve(in transcript: FoundationModels::Transcript) -> FoundationModels::Transcript.FoundationModels::ImageAttachment?
+  public func resolved(in transcript: some Sequence<Transcript.Entry>) -> FoundationModels::Transcript.FoundationModels::ImageAttachment?
 }
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
 @available(tvOS, unavailable)

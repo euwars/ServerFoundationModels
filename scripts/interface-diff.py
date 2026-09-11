@@ -29,7 +29,6 @@ ALLOWLIST_PATTERNS = [
     r"^[\w.]+\.PartiallyGenerated\.var id: GenerationID$",
     r"^[\w.]+\.PartiallyGenerated\.var \w+: [\w.]+\.PartiallyGenerated\?$",
     r"^[\w.]+\.PartiallyGenerated\.init \(_ generatedContent: GeneratedContent\) throws$",
-    r"^Transcript\.Segment\.custom\b.*",            # existential spelling differs in emission
     # Apple-graphics-typed API (CGImage/CIImage/CVPixelBuffer) does not exist
     # off Apple platforms — matching FoundationModels itself.
     r".*\b(CGImage|CIImage|CVPixelBuffer|CGImagePropertyOrientation|ciImage|pixelBuffer)\b.*",

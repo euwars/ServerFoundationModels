@@ -289,7 +289,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: String,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<String> {
         let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(
             metadata: metadata,
@@ -326,7 +326,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<GeneratedContent> {
         try await respondStructured(
             to: prompt, schema: schema,
@@ -353,7 +353,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
-        metadata: [String: any Sendable & Codable & Equatable]
+        metadata: [String: any ConvertibleToGeneratedContent]
     ) async throws -> Response<GeneratedContent> {
         var contextOptions = contextOptions
         contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
@@ -397,7 +397,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<Content> where Content: Generable {
         try await respondTyped(
             to: prompt, generating: type,
@@ -423,7 +423,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
-        metadata: [String: any Sendable & Codable & Equatable]
+        metadata: [String: any ConvertibleToGeneratedContent]
     ) async throws -> Response<Content> where Content: Generable {
         var contextOptions = contextOptions
         contextOptions.includeSchemaInPrompt = contextOptions.includeSchemaInPrompt ?? includeSchemaInPrompt
@@ -476,7 +476,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: String,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<String> {
         // Snapshots are cumulative, so coalescing to the newest one is safe
         // and bounds buffering for slow consumers (each snapshot carries the
@@ -491,6 +491,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             contextOptions: contextOptions
         ))
 
+        // Existential-valued metadata is not Sendable; normalize before the task.
+        let metadata = metadata.mapValues { $0.generatedContent }
         let generation = Task {
             do {
                 try await withTurn(appending: promptEntry) { preCount in
@@ -536,7 +538,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<Content> where Content: Generable {
         streamTyped(to: prompt, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -559,7 +561,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
-        metadata: [String: any Sendable & Codable & Equatable]
+        metadata: [String: any ConvertibleToGeneratedContent]
     ) -> ResponseStream<Content> where Content: Generable {
         // Coalescable cumulative snapshots: see the plain streaming path.
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Swift.Error>
@@ -576,6 +578,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             contextOptions: effectiveContextOptions
         ))
 
+        // Existential-valued metadata is not Sendable; normalize before the task.
+        let metadata = metadata.mapValues { $0.generatedContent }
         let generation = Task {
             do {
                 try await withTurn(appending: promptEntry) { preCount in
@@ -654,7 +658,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: Prompt,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<String> {
         try await respond(to: prompt.text, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -662,7 +666,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     public func respond(
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) async throws -> Response<String> {
         try await respond(to: try prompt().text, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -673,7 +677,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<GeneratedContent> {
         try await respond(to: prompt.text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -682,7 +686,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) async throws -> Response<GeneratedContent> {
         try await respond(to: try prompt().text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -693,7 +697,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) async throws -> Response<Content> where Content: Generable {
         try await respond(to: prompt.text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -702,7 +706,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) async throws -> Response<Content> where Content: Generable {
         try await respond(to: try prompt().text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -711,7 +715,7 @@ public final class LanguageModelSession: @unchecked Sendable {
     public func streamResponse(
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) rethrows -> ResponseStream<String> {
         streamResponse(to: try prompt().text, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -734,7 +738,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<GeneratedContent> {
         streamStructured(to: prompt, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -756,7 +760,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<GeneratedContent> {
         streamStructured(to: prompt.text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -777,7 +781,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) rethrows -> ResponseStream<GeneratedContent> {
         streamStructured(to: try prompt().text, schema: schema, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -790,7 +794,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         includeSchemaInPrompt: Bool? = nil,
         options: GenerationOptions,
         contextOptions: ContextOptions,
-        metadata: [String: any Sendable & Codable & Equatable]
+        metadata: [String: any ConvertibleToGeneratedContent]
     ) -> ResponseStream<GeneratedContent> {
         // Coalescable cumulative snapshots: see the plain streaming path.
         let (stream, continuation) = AsyncThrowingStream<ResponseStream<GeneratedContent>.Snapshot, any Swift.Error>
@@ -805,6 +809,8 @@ public final class LanguageModelSession: @unchecked Sendable {
             responseFormat: Transcript.ResponseFormat(schema: schema),
             contextOptions: effectiveContextOptions
         ))
+        // Existential-valued metadata is not Sendable; normalize before the task.
+        let metadata = metadata.mapValues { $0.generatedContent }
         let generation = Task {
             do {
                 try await withTurn(appending: promptEntry) { preCount in
@@ -850,7 +856,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<Content> where Content: Generable {
         streamTyped(to: prompt.text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -859,7 +865,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         generating type: Content.Type = Content.self,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         @PromptBuilder prompt: () throws -> Prompt
     ) rethrows -> ResponseStream<Content> where Content: Generable {
         streamTyped(to: try prompt().text, generating: type, options: options, contextOptions: contextOptions, metadata: metadata)
@@ -921,7 +927,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         to prompt: Prompt,
         options: GenerationOptions = GenerationOptions(),
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> ResponseStream<String> {
         streamResponse(to: prompt.text, options: options, contextOptions: contextOptions, metadata: metadata)
     }
@@ -983,7 +989,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         // History modifiers read and write the conversational history through
         // the session's `history` property during resolution; the session
         // adopts whatever they leave behind.
-        properties.history = allEntries[...]
+        properties.history = Transcript.HistoryView(allEntries)
         guard let profileResolver else {
             profileLock.withLock { _lastResolvedProfile = nil }
             return (nil, options, transcript)
@@ -1080,7 +1086,7 @@ public final class LanguageModelSession: @unchecked Sendable {
         schema: GenerationSchema?,
         options: GenerationOptions,
         contextOptions: ContextOptions = ContextOptions(),
-        metadata: [String: any Sendable & Codable & Equatable] = [:],
+        metadata: [String: any ConvertibleToGeneratedContent] = [:],
         onCumulativeText: (@Sendable (_ roundText: String) -> Void)?
     ) async throws -> LoopResult {
         var turnUsage = Usage()
@@ -1113,13 +1119,13 @@ public final class LanguageModelSession: @unchecked Sendable {
                 includeSchemaInPrompt: contextOptions.includeSchemaInPrompt,
                 reasoningLevel: contextOptions.reasoningLevel ?? resolved?.reasoningLevel
             )
-            request.metadata = metadata
+            request.metadata = metadata.mapValues { $0.generatedContent }
             // Attribute the request to its session, without overriding a
             // label a caller set explicitly per request.
             if let timelineLabel, request.metadata["timeline.session"] == nil {
-                request.metadata["timeline.session"] = timelineLabel
+                request.metadata["timeline.session"] = GeneratedContent(timelineLabel)
             }
-            request.metadata["timeline.instance"] = timelineInstance
+            request.metadata["timeline.instance"] = GeneratedContent(timelineInstance)
             request.executableTools = activeTools
 
             let perform = resolved?.perform ?? self.perform
@@ -1134,25 +1140,15 @@ public final class LanguageModelSession: @unchecked Sendable {
             var text = ""
             var reasoning = ""
             var reasoningSignature: Data?
-            var reasoningMetadata: [String: any Sendable & Codable & Equatable] = [:]
+            var reasoningMetadata: [String: GeneratedContent] = [:]
             var usage = Usage()
             var toolCallOrder: [String] = []
             var toolCallAccumulator: [String: (name: String, argumentsJSON: String)] = [:]
             var recordedCalls: [Transcript.ToolCall] = []
             var recordedOutputs: [Transcript.ToolOutput] = []
             var responseSegments: [Transcript.Segment] = []
-            var customSegmentIndices: [String: Int] = [:]
             var attachmentSegmentIndices: [String: Int] = [:]
-            var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
-
-            func upsertCustomSegment(_ segment: any Transcript.CustomSegment) {
-                if let index = customSegmentIndices[segment.id] {
-                    responseSegments[index] = .custom(segment)
-                } else {
-                    customSegmentIndices[segment.id] = responseSegments.count
-                    responseSegments.append(.custom(segment))
-                }
-            }
+            var responseMetadata: [String: GeneratedContent] = [:]
 
             func appendResponseText(_ fragment: String) {
                 guard !fragment.isEmpty else { return }
@@ -1178,7 +1174,6 @@ public final class LanguageModelSession: @unchecked Sendable {
                 responseSegments.remove(at: index)
                 attachmentSegmentIndices.removeValue(forKey: id)
                 attachmentSegmentIndices = attachmentSegmentIndices.mapValues { $0 > index ? $0 - 1 : $0 }
-                customSegmentIndices = customSegmentIndices.mapValues { $0 > index ? $0 - 1 : $0 }
             }
 
             // Streamed usage reports are running totals: the latest report
@@ -1208,8 +1203,6 @@ public final class LanguageModelSession: @unchecked Sendable {
                             responseSegments.append(.text(.init(content: replacement.content)))
                         }
                         onCumulativeText?(text)
-                    case .updateCustomSegment(let segment):
-                        upsertCustomSegment(segment)
                     case .updateUsage(let reported):
                         accumulate(reported)
                     case .addAttachmentSegment(let segment):
@@ -1567,17 +1560,17 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
         public var input: Input
         public var output: Output
-        public var metadata: [String: any Sendable & Codable & Equatable]
+        public var metadata: [String: GeneratedContent]
 
         /// Combined input and output token count.
         public var totalTokenCount: Int {
             input.totalTokenCount + output.totalTokenCount
         }
 
-        public init(input: Input, output: Output, metadata: [String: any Sendable & Codable & Equatable] = [:]) {
+        public init(input: Input, output: Output, metadata: [String: any ConvertibleToGeneratedContent] = [:]) {
             self.input = input
             self.output = output
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
         }
 
         init() {

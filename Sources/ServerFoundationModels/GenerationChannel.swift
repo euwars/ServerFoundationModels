@@ -1,5 +1,5 @@
 // LanguageModelExecutorGenerationChannel — the public event stream executors
-// write generation results into. Mirrors FoundationModels (SDK 27 beta 4):
+// write generation results into. Mirrors FoundationModels (SDK 27):
 // Event and the Action types are opaque structs built through static
 // factories — executors send events; only the session interprets them.
 // Events are entry-ID-addressed edits (response text, reasoning, tool calls)
@@ -107,7 +107,7 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
     // MARK: Shared payloads
 
     public struct Metadata: Sendable {
-        public var values: [String: any Sendable & Codable & Equatable]
+        public var values: [String: GeneratedContent]
     }
 
     public struct Usage: Sendable {
@@ -129,15 +129,15 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
         }
         public var input: Input
         public var output: Output
-        public var metadata: [String: any Sendable & Codable & Equatable]
+        public var metadata: [String: GeneratedContent]
         public init(
             input: Input,
             output: Output,
-            metadata: [String: any Sendable & Codable & Equatable] = [:]
+            metadata: [String: any ConvertibleToGeneratedContent] = [:]
         ) {
             self.input = input
             self.output = output
-            self.metadata = metadata
+            self.metadata = metadata.mapValues { $0.generatedContent }
         }
     }
 
@@ -168,7 +168,6 @@ public struct LanguageModelExecutorGenerationChannel: AsyncSequence, Sendable {
             package enum Storage: Sendable {
                 case appendText(TextFragment)
                 case replaceTextSegment(TextSegmentReplacement)
-                case updateCustomSegment(any Transcript.CustomSegment)
                 case addAttachmentSegment(Transcript.AttachmentSegment)
                 case removeAttachmentSegment(id: String)
                 case updateMetadata(Metadata)
@@ -264,10 +263,6 @@ extension LanguageModelExecutorGenerationChannel.Response.Action {
         .init(storage: .replaceTextSegment(.init(content: text, segmentID: segmentID, tokenCount: tokenCount)))
     }
 
-    public static func updateCustomSegment(_ segment: any Transcript.CustomSegment) -> Self {
-        .init(storage: .updateCustomSegment(segment))
-    }
-
     public static func addAttachmentSegment(_ segment: Transcript.AttachmentSegment) -> Self {
         .init(storage: .addAttachmentSegment(segment))
     }
@@ -276,14 +271,14 @@ extension LanguageModelExecutorGenerationChannel.Response.Action {
         .init(storage: .removeAttachmentSegment(id: id))
     }
 
-    public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .init(storage: .updateMetadata(.init(values: values)))
+    public static func updateMetadata(_ values: [String: any ConvertibleToGeneratedContent]) -> Self {
+        .init(storage: .updateMetadata(.init(values: values.mapValues { $0.generatedContent })))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
         output: LanguageModelExecutorGenerationChannel.Usage.Output,
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> Self {
         .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
@@ -302,14 +297,14 @@ extension LanguageModelExecutorGenerationChannel.Reasoning.Action {
         .init(storage: .updateSignature(.init(signature: signature, tokenCount: tokenCount)))
     }
 
-    public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .init(storage: .updateMetadata(.init(values: values)))
+    public static func updateMetadata(_ values: [String: any ConvertibleToGeneratedContent]) -> Self {
+        .init(storage: .updateMetadata(.init(values: values.mapValues { $0.generatedContent })))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
         output: LanguageModelExecutorGenerationChannel.Usage.Output,
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> Self {
         .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
@@ -328,14 +323,14 @@ extension LanguageModelExecutorGenerationChannel.ToolCalls.Action {
         .init(storage: .removeToolCall(id: id))
     }
 
-    public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .init(storage: .updateMetadata(.init(values: values)))
+    public static func updateMetadata(_ values: [String: any ConvertibleToGeneratedContent]) -> Self {
+        .init(storage: .updateMetadata(.init(values: values.mapValues { $0.generatedContent })))
     }
 
     public static func updateUsage(
         input: LanguageModelExecutorGenerationChannel.Usage.Input,
         output: LanguageModelExecutorGenerationChannel.Usage.Output,
-        metadata: [String: any Sendable & Codable & Equatable] = [:]
+        metadata: [String: any ConvertibleToGeneratedContent] = [:]
     ) -> Self {
         .init(storage: .updateUsage(.init(input: input, output: output, metadata: metadata)))
     }
@@ -346,8 +341,8 @@ extension LanguageModelExecutorGenerationChannel.ToolCalls.ToolCall.Action {
         .init(storage: .appendArguments(.init(content: content, tokenCount: tokenCount)))
     }
 
-    public static func updateMetadata(_ values: [String: any Sendable & Codable & Equatable]) -> Self {
-        .init(storage: .updateMetadata(.init(values: values)))
+    public static func updateMetadata(_ values: [String: any ConvertibleToGeneratedContent]) -> Self {
+        .init(storage: .updateMetadata(.init(values: values.mapValues { $0.generatedContent })))
     }
 }
 

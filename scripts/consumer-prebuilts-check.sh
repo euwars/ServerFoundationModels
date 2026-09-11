@@ -10,8 +10,10 @@
 #      product on the library target would disable prebuilts for consumers.
 #
 # Run on a toolchain with published prebuilt manifests (Linux: swift:6.3.2;
-# macOS: Xcode 26.5+ / 27 beta). On unlisted toolchains SwiftPM silently
-# falls back to building swift-syntax from source and this script fails.
+# macOS: Xcode 26.5+ / 27 betas). On unlisted toolchains — including the
+# Xcode 27.0 GM (swiftlang-6.4.0.34.1) until Swift.org publishes its manifest
+# — SwiftPM silently falls back to building swift-syntax from source and this
+# script fails. Check https://download.swift.org/?list-type=2&prefix=prebuilts/swift-syntax/
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,13 +53,29 @@ print("consumer built ok")
 EOF
 
 cd "$WORK_DIR/consumer"
-swift build 2>&1 | tee build.log
-
-if [ ! -d .build/prebuilts/swift-syntax ]; then
-    echo "FAIL: no .build/prebuilts/swift-syntax — prebuilt was not downloaded" >&2
+# Verbose so the log records SwiftPM's prebuilt manifest lookup; kept out of
+# the terminal, shown on failure.
+if ! swift build -v > build.log 2>&1; then
+    tail -40 build.log >&2
+    echo "FAIL: consumer build failed" >&2
     exit 1
 fi
-if grep -q "Compiling SwiftSyntax" build.log; then
+
+# SwiftPM creates the prebuilts directory before it knows whether a manifest
+# exists for this toolchain, so the directory alone proves nothing: require a
+# downloaded manifest and no source-build artifacts. (The swiftbuild backend,
+# the default since Xcode 27, does not print "Compiling SwiftSyntax", so a
+# log grep alone would pass a from-source build.)
+if grep -qE "Prebuilt .*badResponseStatusCode|Failed to decode prebuilt manifest" build.log; then
+    echo "FAIL: no prebuilt swift-syntax manifest is published for this toolchain ($(swift --version 2>&1 | head -1))" >&2
+    exit 1
+fi
+if ! ls .build/prebuilts/swift-syntax/*/*.json >/dev/null 2>&1; then
+    echo "FAIL: no prebuilt manifest under .build/prebuilts/swift-syntax — prebuilt was not downloaded" >&2
+    exit 1
+fi
+if grep -q "Compiling SwiftSyntax" build.log \
+    || [ -n "$(find .build -path '*/prebuilts/*' -prune -o \( -name 'SwiftSyntax.build' -o -name 'SwiftSyntax-t.build' \) -print | head -1)" ]; then
     echo "FAIL: swift-syntax was compiled from source" >&2
     exit 1
 fi
