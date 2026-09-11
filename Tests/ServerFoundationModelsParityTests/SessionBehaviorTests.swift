@@ -31,6 +31,14 @@ struct ScriptError: Error, Equatable {
     var message: String
 }
 
+/// Records what a history transform was handed, across turns.
+final class TransformInputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _inputs: [[Transcript.Entry]] = []
+    var inputs: [[Transcript.Entry]] { lock.withLock { _inputs } }
+    func record(_ entries: [Transcript.Entry]) { lock.withLock { _inputs.append(entries) } }
+}
+
 enum ScriptedResponseEvent: Sendable {
     case addAttachment(Transcript.AttachmentSegment)
     case removeAttachment(id: String)
@@ -326,9 +334,12 @@ struct SessionBehaviorTests {
         #expect(entryText(turn.first ?? .response(Transcript.Response(segments: []))) == "new question")
         #expect(entryText(turn.last ?? .response(Transcript.Response(segments: []))) == "answer")
 
-        // The transform's result is the persisted state: instructions + the
-        // surviving prompt + the response.
-        #expect(session.transcript.count == 3)
+        // The transform shapes only the request: the model saw the one
+        // surviving entry (the prompt — suffix(1) of the full transcript,
+        // instructions included), while the session keeps instructions + 4
+        // seeded entries + prompt + response.
+        #expect(script.recordedRequests.first?.transcript.count == 1)
+        #expect(session.transcript.count == 7)
     }
 
     @Test("a failed respond after a shrinking transform still reverts the prompt")
@@ -346,10 +357,9 @@ struct SessionBehaviorTests {
             _ = try await session.respond(to: "new question")
         }
         #expect(!session.transcript.contains { entryText($0) == "new question" })
-        #expect(!session.transcript.contains { entry in
-            if case .prompt = entry { return true }
-            return false
-        })
+        // The seeded history is untouched: the transform never persisted.
+        #expect(session.transcript.count == 5, "instructions + 4 seeded entries")
+        #expect(session.transcript.contains { entryText($0) == "old q1" })
     }
 
     // MARK: Tool-round text
@@ -543,10 +553,10 @@ struct SessionBehaviorTests {
         #expect(entryText(try #require(instructions2)) == "Be terse\nAnswer in French")
     }
 
-    // MARK: inputFilter vs historyTransform persistence
+    // MARK: historyTransform and inputFilter are request-only
 
-    @Test("inputFilter shapes only the request transcript; historyTransform persists")
-    func inputFilterIsNotPersisted() async throws {
+    @Test("historyTransform and inputFilter shape only the request transcript; neither persists")
+    func transformsAreNotPersisted() async throws {
         // inputFilter: the request sees the filtered copy, the session keeps
         // its full history.
         let script = ScriptBox(rounds: [ScriptedRound(textFragments: ["a1"])])
@@ -562,16 +572,26 @@ struct SessionBehaviorTests {
         #expect(session.transcript.count == 7)
         #expect(session.transcript.contains { entryText($0) == "old q1" })
 
-        // historyTransform: deliberately persisted.
+        // historyTransform: sees the full transcript (instructions first) and
+        // its result is the request, verbatim — no instructions re-added.
         let script2 = ScriptBox(rounds: [ScriptedRound(textFragments: ["a2"])])
+        let seen = TransformInputBox()
         let profile2 = LanguageModelSession.Profile { "sys" }
             .model(ScriptedModel(script: script2))
-            .historyTransform { entries in Array(entries.suffix(1)) }
+            .historyTransform { entries in
+                seen.record(entries)
+                return Array(entries.suffix(1))
+            }
         let session2 = LanguageModelSession(profile: profile2, history: seedHistory())
 
         _ = try await session2.respond(to: "new question")
-        #expect(session2.transcript.count == 3, "instructions + prompt + response")
-        #expect(!session2.transcript.contains { entryText($0) == "old q1" })
+        let input = try #require(seen.inputs.first)
+        #expect(input.count == 6, "instructions + 4 seeded entries + prompt")
+        if case .instructions = input.first {} else { Issue.record("transform input should start with the instructions entry") }
+        let request2 = try #require(script2.recordedRequests.first)
+        #expect(request2.transcript.count == 1, "exactly the transform's result")
+        #expect(session2.transcript.count == 7, "instructions + 4 seeded + prompt + response, all retained")
+        #expect(session2.transcript.contains { entryText($0) == "old q1" })
     }
 
     // MARK: Session properties outside a binding

@@ -348,10 +348,12 @@ struct ResolvedProfile {
     var toolCallingMode: GenerationOptions.ToolCallingMode?
     var reasoningLevel: ContextOptions.ReasoningLevel?
     var transcriptErrorHandlingPolicy: TranscriptErrorHandlingPolicy?
-    /// Persisted into the session transcript by `prepareTurn`.
+    /// Applied by `prepareTurn` to the full transcript (instructions entry
+    /// included); the result is sent to the model verbatim and never
+    /// persisted — matching the framework.
     var historyTransform: (([Transcript.Entry]) -> [Transcript.Entry])?
-    /// Applied only to the transcript copy sent with each request — never
-    /// persisted, unlike `historyTransform`.
+    /// Applied after the history transform to the non-instructions entries
+    /// of the request copy; likewise never persisted.
     var inputFilter: (([Transcript.Entry]) -> [Transcript.Entry])?
     var onPrompt: [(Transcript.Prompt) async throws -> Void] = []
     var onResponse: [(Transcript.Response) async throws -> Void] = []

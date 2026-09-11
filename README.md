@@ -44,9 +44,9 @@ let package = Package(
     platforms: [.macOS("27.0")],
     dependencies: [
         .package(url: "https://github.com/euwars/ServerFoundationModels.git",
-                 from: "0.1.0"),
+                 from: "0.8.0"),
         .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
-                 from: "0.1.0", traits: ["ServerFoundationModels"]),
+                 from: "0.3.0", traits: ["ServerFoundationModels"]),
     ],
     targets: [
         .executableTarget(name: "App", dependencies: [

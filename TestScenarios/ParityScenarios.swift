@@ -441,6 +441,30 @@ struct BehaviorParityScenarios {
         #expect(response.content.localizedCaseInsensitiveContains("capybara"))
     }
 
+    @Test("history transforms see the full transcript, shape only the request, and are never persisted")
+    func historyTransformIsRequestOnly() async throws {
+        let observer = ParityTransformObserver()
+        let session = LanguageModelSession(profile: ParityWindowProfile(observer: observer))
+        _ = try await session.respond(to: "Say hello.", options: deterministic)
+        _ = try await session.respond(to: "Say hello again.", options: deterministic)
+
+        let inputs = observer.inputs
+        #expect(inputs.count == 2)
+        // Second turn: the transform is handed the instructions entry plus the
+        // full conversation so far (prompt, response, new prompt).
+        #expect(inputs.last?.count == 4)
+        if case .instructions = inputs.last?.first {} else {
+            Issue.record("the transform should receive the instructions entry first")
+        }
+        // The transform kept only the in-flight prompt, yet the session
+        // retains everything: instructions + two prompts + two responses.
+        #expect(session.transcript.count == 5)
+        #expect(session.transcript.contains { entry in
+            if case .prompt(let prompt) = entry { return plainText(prompt.segments).contains("Say hello.") }
+            return false
+        })
+    }
+
     @Test("reasoning ('thinking') output is recorded as reasoning entries, never leaked into content")
     func reasoningRecordedSeparately() async throws {
         let session = LanguageModelSession(model: ParityModel.make())
@@ -1071,6 +1095,29 @@ struct ParityProfile: LanguageModelSession.DynamicProfile {
             .historyTransform { entries in
                 Array(entries.suffix(4))
             }
+        }
+    }
+}
+
+/// Records what a history transform was handed, across turns.
+final class ParityTransformObserver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _inputs: [[Transcript.Entry]] = []
+    var inputs: [[Transcript.Entry]] { lock.withLock { _inputs } }
+    func record(_ entries: [Transcript.Entry]) { lock.withLock { _inputs.append(entries) } }
+}
+
+struct ParityWindowProfile: LanguageModelSession.DynamicProfile {
+    let observer: ParityTransformObserver
+
+    var body: some DynamicProfile {
+        Profile {
+            Instructions("You are terse.")
+        }
+        .model(ParityModel.make())
+        .historyTransform { entries in
+            observer.record(entries)
+            return Array(entries.suffix(1))
         }
     }
 }

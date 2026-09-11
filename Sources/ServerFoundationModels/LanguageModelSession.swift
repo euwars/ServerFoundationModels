@@ -976,11 +976,14 @@ public final class LanguageModelSession: @unchecked Sendable {
         return []
     }
 
-    /// Resolves the dynamic profile for a new prompt, persisting its history
-    /// transform and refreshed instructions entry into the stored transcript —
-    /// matching the framework: the transcript IS the post-profile state.
-    /// The returned transcript is what the request must send: it additionally
-    /// has the profile's input filter applied, which is never persisted.
+    /// Resolves the dynamic profile for a new prompt. Persisted into the
+    /// stored transcript: the refreshed instructions entry and whatever the
+    /// profile's `onPrompt` handlers left in `history`. The returned
+    /// transcript is what the request must send: the persisted entries with
+    /// the profile's history transform and input filter applied. Matching the
+    /// framework (verified against SDK 27), the transform sees the full
+    /// transcript — instructions entry included — its result goes to the
+    /// model verbatim, and neither it nor the filter is ever persisted.
     private func prepareTurn(options: GenerationOptions, firstRound: Bool = true) async throws -> (ResolvedProfile?, GenerationOptions, Transcript) {
         var allEntries = transcript.allEntries
         let instructionEntries = allEntries.filter { if case .instructions = $0 { return true }; return false }
@@ -1020,18 +1023,6 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
         var entries = Array(properties.history)
 
-        if let transform = resolved.historyTransform {
-            entries = transform(entries)
-            switch entries.last {
-            case .prompt, .toolOutput:
-                break
-            default:
-                throw SessionControlError(reason: .invalidTranscript(
-                    description: "Transcript must end with a .prompt or .toolOutput entry."
-                ))
-            }
-        }
-
         let activeTools = tools + resolved.tools
         if let instructionsText = resolved.instructionsText {
             entries.insert(.instructions(Transcript.Instructions(
@@ -1045,9 +1036,20 @@ public final class LanguageModelSession: @unchecked Sendable {
         }
         replaceTranscript(Transcript(entries: entries))
 
-        // The input filter shapes only the transcript copy sent with this
-        // request — unlike the history transform, it is never persisted.
+        // The history transform and the input filter shape only the
+        // transcript copy sent with this request; neither is persisted.
         var requestEntries = entries
+        if let transform = resolved.historyTransform {
+            requestEntries = transform(requestEntries)
+            switch requestEntries.last {
+            case .prompt, .toolOutput:
+                break
+            default:
+                throw SessionControlError(reason: .invalidTranscript(
+                    description: "Transcript must end with a .prompt or .toolOutput entry."
+                ))
+            }
+        }
         if let filter = resolved.inputFilter {
             let requestInstructions = requestEntries.filter {
                 if case .instructions = $0 { return true }; return false
