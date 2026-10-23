@@ -46,7 +46,7 @@ let package = Package(
         .package(url: "https://github.com/euwars/ServerFoundationModels.git",
                  from: "0.8.0"),
         .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
-                 from: "0.4.0", traits: ["ServerFoundationModels"]),
+                 from: "0.5.0", traits: ["ServerFoundationModels"]),
     ],
     targets: [
         .executableTarget(name: "App", dependencies: [
@@ -56,6 +56,41 @@ let package = Package(
     ]
 )
 ```
+
+> **Apple's framework on Apple platforms, this package everywhere else.** An
+> app that ships on Apple devices and also runs on a Linux server does not have
+> to choose. Import the framework through one re-export file in your app and
+> make this package a Linux-only dependency:
+>
+> ```swift
+> // Sources/App/Framework.swift — the only place the choice is spelled
+> #if canImport(FoundationModels)
+> @_exported import FoundationModels
+> #else
+> @_exported import ServerFoundationModels
+> #endif
+> ```
+>
+> ```swift
+> // Package.swift
+> .product(name: "ServerFoundationModels", package: "ServerFoundationModels",
+>          condition: .when(platforms: [.linux])),
+> ```
+>
+> On a Mac this leaves ServerFoundationModels and swift-syntax out of the build
+> entirely, so Instruments, the on-device model, and Xcode's Foundation Models
+> tooling see your app exactly as they would any other. On Linux the same
+> source compiles against this package. The provider packages make the same
+> choice by platform from
+> [OpenrouterForFoundationModels 0.5.0](https://github.com/euwars/OpenrouterForFoundationModels)
+> and
+> [foundation-models-utilities 0.4.0](https://github.com/euwars/foundation-models-utilities)
+> on, so with the re-export file you pass them no trait. Keep their
+> `ServerFoundationModels` trait only when your app imports
+> `ServerFoundationModels` directly on a Mac (as the manifest above does) or
+> when you cross-compile, because the platform choice is made where the
+> manifest is evaluated. Everything you use must exist in both frameworks; a
+> CI that builds both sides is the check.
 
 > **Note — module aliasing.** A `moduleAliases: ["ServerFoundationModels":
 > "FoundationModels"]` "zero-line switch" does **not** work: this package's own
