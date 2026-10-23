@@ -46,7 +46,7 @@ let package = Package(
         .package(url: "https://github.com/euwars/ServerFoundationModels.git",
                  from: "0.8.0"),
         .package(url: "https://github.com/euwars/OpenrouterForFoundationModels.git",
-                 from: "0.3.0", traits: ["ServerFoundationModels"]),
+                 from: "0.4.0", traits: ["ServerFoundationModels"]),
     ],
     targets: [
         .executableTarget(name: "App", dependencies: [
