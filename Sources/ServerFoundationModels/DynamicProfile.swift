@@ -428,12 +428,14 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
             case .samplingMode(let value): resolved.samplingMode = value
             case .maximumResponseTokens(let value): resolved.maximumResponseTokens = value
             case .reasoningLevel(let value): resolved.reasoningLevel = value
+            // A modifier wraps its content, so its transform runs first and the content's
+            // sees the result, as in Apple's framework (verified against SDK 27).
             case .historyTransform(let transform):
                 let existing = resolved.historyTransform
-                resolved.historyTransform = existing.map { first in { transform(first($0)) } } ?? transform
+                resolved.historyTransform = existing.map { inner in { inner(transform($0)) } } ?? transform
             case .inputFilter(let filter):
                 let existing = resolved.inputFilter
-                resolved.inputFilter = existing.map { first in { filter(first($0)) } } ?? filter
+                resolved.inputFilter = existing.map { inner in { inner(filter($0)) } } ?? filter
             case .toolCallingMode(let mode): resolved.toolCallingMode = mode
             case .transcriptErrorHandlingPolicy(let policy): resolved.transcriptErrorHandlingPolicy = policy
             case .onPrompt(let action): resolved.onPrompt.append(action)
@@ -471,13 +473,14 @@ extension LanguageModelSession.ModifiedDynamicProfile: ResolvableDynamicProfile 
         if fromBody.transcriptErrorHandlingPolicy == nil {
             fromBody.transcriptErrorHandlingPolicy = resolved.transcriptErrorHandlingPolicy
         }
+        // The body wraps the content, so its transform runs first here too.
         if let contentTransform = resolved.historyTransform {
             let bodyTransform = fromBody.historyTransform
-            fromBody.historyTransform = bodyTransform.map { second in { second(contentTransform($0)) } } ?? contentTransform
+            fromBody.historyTransform = bodyTransform.map { outer in { contentTransform(outer($0)) } } ?? contentTransform
         }
         if let contentFilter = resolved.inputFilter {
             let bodyFilter = fromBody.inputFilter
-            fromBody.inputFilter = bodyFilter.map { second in { second(contentFilter($0)) } } ?? contentFilter
+            fromBody.inputFilter = bodyFilter.map { outer in { contentFilter(outer($0)) } } ?? contentFilter
         }
         fromBody.tools = resolved.tools + fromBody.tools
         fromBody.onPrompt = resolved.onPrompt + fromBody.onPrompt

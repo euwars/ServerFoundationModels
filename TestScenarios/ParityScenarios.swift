@@ -1294,4 +1294,81 @@ struct ThermometerTool: Tool {
     }
 }
 
+// MARK: - Profile composition parity (no model needed)
+
+/// Answers "ok" to anything, so a scenario about how a profile composes runs the same on both
+/// sides without a live model.
+struct ParityEchoModel: LanguageModel {
+    var capabilities: LanguageModelCapabilities { LanguageModelCapabilities([]) }
+    var executorConfiguration: Executor.Configuration { Executor.Configuration() }
+
+    struct Executor: LanguageModelExecutor {
+        struct Configuration: Hashable, Sendable {}
+
+        init(configuration: Configuration) throws {}
+
+        func respond(
+            to request: LanguageModelExecutorGenerationRequest,
+            model: ParityEchoModel,
+            streamingInto channel: LanguageModelExecutorGenerationChannel
+        ) async throws {
+            await channel.send(.response(action: .appendText("ok", tokenCount: 1)))
+        }
+    }
+}
+
+/// The order the transforms of one request ran in.
+final class ParityCallOrder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [String] = []
+    var calls: [String] { lock.withLock { _calls } }
+    func record(_ name: String) { lock.withLock { _calls.append(name) } }
+}
+
+/// Adds a history transform around whatever profile it modifies.
+struct ParityOuterTransform: LanguageModelSession.DynamicProfileModifier {
+    let order: ParityCallOrder
+
+    func body(content: Content) -> some LanguageModelSession.DynamicProfile {
+        content.historyTransform { entries in
+            order.record("outer")
+            return entries
+        }
+    }
+}
+
+@Suite("Profile composition parity")
+struct ProfileCompositionParityScenarios {
+    @Test("stacked history transforms run outermost first, the way a modifier wraps its content")
+    func stackedTransformsRunOutermostFirst() async throws {
+        let order = ParityCallOrder()
+        let profile = LanguageModelSession.Profile { Instructions("You are terse.") }
+            .model(ParityEchoModel())
+            .historyTransform { entries in
+                order.record("inner")
+                return entries
+            }
+            .historyTransform { entries in
+                order.record("outer")
+                return entries
+            }
+        _ = try await LanguageModelSession(profile: profile).respond(to: "Say hello.")
+        #expect(order.calls == ["outer", "inner"])
+    }
+
+    @Test("a custom modifier's transform runs before the transform of the content it wraps")
+    func customModifierTransformRunsFirst() async throws {
+        let order = ParityCallOrder()
+        let profile = LanguageModelSession.Profile { Instructions("You are terse.") }
+            .model(ParityEchoModel())
+            .historyTransform { entries in
+                order.record("inner")
+                return entries
+            }
+            .modifier(ParityOuterTransform(order: order))
+        _ = try await LanguageModelSession(profile: profile).respond(to: "Say hello.")
+        #expect(order.calls == ["outer", "inner"])
+    }
+}
+
 #endif
