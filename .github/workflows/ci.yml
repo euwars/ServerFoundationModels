@@ -40,11 +40,13 @@ jobs:
   # swift-syntax prebuilts, consumers never compile swift-syntax from source.
   # Guards the two properties that keep that true — the resolved swift-syntax
   # version has prebuilts, and swift-syntax products stay off the library
-  # target. Pinned to swift:6.3.2 because prebuilt manifests are published per
-  # exact toolchain version (download.swift.org/prebuilts/swift-syntax/).
+  # target. Pinned to swift:6.4.0-noble because prebuilt manifests are published
+  # per exact toolchain version and distro (download.swift.org/prebuilts/
+  # swift-syntax/): swift-syntax 604.0.0 has them for 6.4.0 on Ubuntu jammy and
+  # noble, not for 6.3.x, 6.4.1 or the resolute images.
   consumer-prebuilts:
     runs-on: ubuntu-latest
-    container: swift:6.3.2
+    container: swift:6.4.0-noble
     steps:
       - uses: actions/checkout@v4
       - name: Consumer build uses prebuilt swift-syntax

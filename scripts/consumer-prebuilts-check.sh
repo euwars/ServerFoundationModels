@@ -9,11 +9,10 @@
 #   2. Only the .macro target depends on swift-syntax products — a swift-syntax
 #      product on the library target would disable prebuilts for consumers.
 #
-# Run on a toolchain with published prebuilt manifests (Linux: swift:6.3.2;
-# macOS: Xcode 26.5+ / 27 betas). On unlisted toolchains — including the
-# Xcode 27.0 GM (swiftlang-6.4.0.34.1) until Swift.org publishes its manifest
-# — SwiftPM silently falls back to building swift-syntax from source and this
-# script fails. Check https://download.swift.org/?list-type=2&prefix=prebuilts/swift-syntax/
+# Run on a toolchain with published prebuilt manifests for the swift-syntax
+# version that resolves (Linux: swift:6.4.0-noble for swift-syntax 604.0.0).
+# On unlisted toolchains SwiftPM silently falls back to building swift-syntax
+# from source and this script fails. Check https://download.swift.org/?list-type=2&prefix=prebuilts/swift-syntax/
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

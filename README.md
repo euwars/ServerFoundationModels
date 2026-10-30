@@ -107,14 +107,13 @@ let package = Package(
 
 > **Build cost.** A clean build of this dependency takes seconds, not minutes.
 > The only heavy dependency is swift-syntax (macro target), and on toolchains
-> with published prebuilts — Linux: Swift 6.3.2 release (`swift:6.3.2` image;
-> Ubuntu, Debian 12, RHEL UBI9, Amazon Linux 2, x86_64 + aarch64), macOS:
-> Xcode 26.5 / Xcode 27 betas — SwiftPM downloads a prebuilt swift-syntax
+> with published prebuilts — Linux: Swift 6.4.0 release (`swift:6.4.0-noble`
+> image; Ubuntu jammy and noble, Debian 12, RHEL UBI9, x86_64 + aarch64), macOS:
+> Swift 6.4.0 toolchains — SwiftPM downloads a prebuilt swift-syntax
 > instead of compiling it (on by default; measured 21 s clean consumer build
 > on Apple Silicon). On toolchains without a published manifest for the
-> resolved swift-syntax version (e.g. `swift:6.2`, and the Xcode 27.0 GM
-> toolchain `swiftlang-6.4.0.34.1` as of 2026-09-11 — Swift.org had published
-> manifests only up to `6.4.0.33.1`), SwiftPM silently falls back to
+> resolved swift-syntax version (e.g. `swift:6.2`, `swift:6.3.2` and the
+> Ubuntu resolute images with swift-syntax 604.0.0), SwiftPM silently falls back to
 > compiling swift-syntax from source — still correct, just slower.
 > CI guards the prebuilt path via `scripts/consumer-prebuilts-check.sh`.
 
@@ -261,8 +260,8 @@ With `OPENROUTER_API_KEY` set, the verify script adds the live bridge smoke.
 
 ## Requirements
 
-- Swift 6.2+ (Linux: `swift:6.2` Docker image or newer; prefer `swift:6.3.2`
-  for prebuilt swift-syntax — see the build-cost note under Installation)
+- Swift 6.2+ (Linux: `swift:6.2` Docker image or newer; prefer
+  `swift:6.4.0-noble` for prebuilt swift-syntax — see the build-cost note under Installation)
 - Apple platforms: macOS 27 / iOS 27 SDK (Xcode 27) for the
   `SystemLanguageModel` bridge and the Apple-oracle test target
 - Command-Line Tools only (no full Xcode): set `SKIP_MACRO_TESTS=1` to skip
