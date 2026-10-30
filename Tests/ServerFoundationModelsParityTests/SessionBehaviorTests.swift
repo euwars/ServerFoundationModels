@@ -246,6 +246,7 @@ private func seedHistory() -> [Transcript.Entry] {
 
 extension SessionPropertyValues {
     @SessionPropertyEntry var behaviorTestFlavor: String = "vanilla"
+    @SessionPropertyEntry var behaviorTestCount: Int = 0
 }
 
 struct BehaviorTwoInstructions: DynamicInstructions {
@@ -721,5 +722,24 @@ struct SessionBehaviorTests {
         // A real session's storage is untouched as well.
         let session = LanguageModelSession(model: ScriptedModel(script: ScriptBox(rounds: [])))
         #expect(session.properties.behaviorTestFlavor == "vanilla")
+    }
+
+    @Test("lifecycle callbacks read and write the session's properties, as tools do")
+    func lifecycleCallbacksSeeSessionProperties() async throws {
+        let script = ScriptBox(rounds: [
+            ScriptedRound(toolCalls: [ScriptedToolCall(id: "c1", name: "behaviorEcho", argumentsJSON: #"{"value":"x"}"#)]),
+            ScriptedRound(textFragments: ["done"], reasoningFragments: ["thinking"]),
+        ])
+        let profile = LanguageModelSession.Profile {
+            BehaviorEchoTool()
+        }
+        .model(ScriptedModel(script: script))
+        .onToolCall { _ in LanguageModelSession.SessionProperty(\.behaviorTestCount).wrappedValue += 1 }
+        .onToolOutput { (_: Transcript.ToolOutput) in LanguageModelSession.SessionProperty(\.behaviorTestCount).wrappedValue += 10 }
+        .onReasoning { _ in LanguageModelSession.SessionProperty(\.behaviorTestCount).wrappedValue += 100 }
+        .onResponse { _ in LanguageModelSession.SessionProperty(\.behaviorTestCount).wrappedValue += 1000 }
+        let session = LanguageModelSession(profile: profile)
+        _ = try await session.respond(to: "go")
+        #expect(session.properties.behaviorTestCount == 1111)
     }
 }

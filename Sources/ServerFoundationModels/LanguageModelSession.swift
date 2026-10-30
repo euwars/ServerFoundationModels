@@ -1011,7 +1011,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                 activateHandlers = resolved.onActivate
             }
         }
-        for action in activateHandlers { await action() }
+        await bindingProperties {
+            for action in activateHandlers { await action() }
+        }
 
         // onPrompt callbacks run with the session's properties bound so
         // history modifiers (e.g. rolling windows) can rewrite `history`;
@@ -1285,7 +1287,9 @@ public final class LanguageModelSession: @unchecked Sendable {
                 )
                 appendEntry(.reasoning(reasoningEntry))
                 if let resolved {
-                    for action in resolved.onReasoning { try await action(reasoningEntry) }
+                    try await bindingProperties {
+                        for action in resolved.onReasoning { try await action(reasoningEntry) }
+                    }
                 }
             }
 
@@ -1297,14 +1301,16 @@ public final class LanguageModelSession: @unchecked Sendable {
                     appendEntry(.toolOutput(output))
                 }
                 if let resolved {
-                    for call in recordedCalls {
-                        for action in resolved.onToolCall { try await action(call) }
-                    }
-                    for output in recordedOutputs {
-                        for action in resolved.onToolOutput { try await action(output) }
-                    }
-                    for (call, output) in zip(recordedCalls, recordedOutputs) {
-                        for action in resolved.onToolCallOutputPair { try await action(call, output) }
+                    try await bindingProperties {
+                        for call in recordedCalls {
+                            for action in resolved.onToolCall { try await action(call) }
+                        }
+                        for output in recordedOutputs {
+                            for action in resolved.onToolOutput { try await action(output) }
+                        }
+                        for (call, output) in zip(recordedCalls, recordedOutputs) {
+                            for action in resolved.onToolCallOutputPair { try await action(call, output) }
+                        }
                     }
                 }
             }
@@ -1411,9 +1417,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 )
                 appendEntry(.toolOutput(toolOutput))
                 if let resolved {
-                    for action in resolved.onToolCall { try await action(entry.call) }
-                    for action in resolved.onToolOutput { try await action(toolOutput) }
-                    for action in resolved.onToolCallOutputPair { try await action(entry.call, toolOutput) }
+                    try await bindingProperties {
+                        for action in resolved.onToolCall { try await action(entry.call) }
+                        for action in resolved.onToolOutput { try await action(toolOutput) }
+                        for action in resolved.onToolCallOutputPair { try await action(entry.call, toolOutput) }
+                    }
                 }
             }
         }
@@ -1423,7 +1431,15 @@ public final class LanguageModelSession: @unchecked Sendable {
     func notifyResponse(_ response: Transcript.Response) async throws {
         let resolved = profileLock.withLock { _lastResolvedProfile }
         guard let resolved else { return }
-        for action in resolved.onResponse { try await action(response) }
+        try await bindingProperties {
+            for action in resolved.onResponse { try await action(response) }
+        }
+    }
+
+    /// Runs lifecycle callbacks with the session's properties bound, as Apple's framework does, so a
+    /// callback reads and writes `@SessionProperty` values instead of defaults that are then dropped.
+    private func bindingProperties(_ callbacks: () async throws -> Void) async rethrows {
+        try await SessionPropertyValues.$current.withValue(properties) { try await callbacks() }
     }
 
     // MARK: Helpers
